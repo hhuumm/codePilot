@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -186,7 +186,10 @@ test("runs a worker, preserves its commit, and builds a Git-native delivery hand
   assert.equal(commitCount.trim(), "1");
   await assert.rejects(access(join(repo, ".codepilot", "runs", summary.runId, "pull-request.md")));
   await assert.rejects(execFileAsync("git", ["-C", repo, "show", "HEAD:result.txt"]));
-  assert.equal(resolve(provider.lastTask?.coordinationRepo ?? ""), resolve(repo));
+  assert.equal(
+    (await realpath(resolve(provider.lastTask?.coordinationRepo ?? ""))).toLowerCase(),
+    (await realpath(resolve(repo))).toLowerCase(),
+  );
   assert.ok(provider.lastTask?.checkoutCommand);
 });
 
