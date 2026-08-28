@@ -16,7 +16,7 @@ codePilot v0.1 is local developer tooling for repositories, objectives, provider
 - The manager is trusted and owns commits, integration, persistence, and policy.
 - Provider processes are semi-trusted: they may edit and execute inside a temporary checkout, but their reports are advisory.
 - Repository code and configured validation commands are trusted by the operator.
-- Remote Git hosting is outside the v0.1 execution path.
+- Remote Git hosting is contacted only when the operator explicitly requests pull-request creation for a run.
 
 ## Existing mitigations
 
@@ -39,13 +39,14 @@ codePilot v0.1 is local developer tooling for repositories, objectives, provider
 - Cooperative file leases do not prevent a provider from ignoring the protocol.
 - SQLite state is local and is not tamper-evident.
 - The experimental Docker files do not yet represent an enforced manager-owned sandbox.
+- Explicit GitHub publication uses the current user's authenticated `gh` and Git credentials to push the generated branch and open a pull request.
 
 ## Operator guidance
 
 - Run codePilot only against repositories you trust and review objectives before launch.
 - Keep `.codepilot/` ignored and do not publish run databases or retained artifacts without inspection.
 - Use least-privilege provider and Git credentials.
-- Review the integration branch and PR draft before manually pushing or merging.
+- Review the integration branch and generated pull-request description before publication; review the resulting draft before merging when a run needs review.
 - Do not treat a `ready` verdict as a security review.
 
 Security issues in codePilot itself should be reported through the process in [`SECURITY.md`](../SECURITY.md).

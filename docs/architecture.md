@@ -9,7 +9,7 @@
 5. The trusted manager commits successful workspace changes, independently inspects Git state, retains a run ref, and removes the temporary checkout.
 6. Eligible task commits are cherry-picked onto `codepilot/<run-id>` based on the latest primary head. Repository-wide validation runs there.
 7. Deterministic policy combines process, report, Git, collision, and validation evidence into a review verdict.
-8. codePilot writes a local pull-request draft. Remote push, PR creation, and primary-branch mutation remain human actions.
+8. codePilot builds a pull-request description from branch and validation evidence. With an explicit publication option, it pushes the integration branch and opens the GitHub pull request.
 
 ## Boundaries
 
@@ -39,7 +39,7 @@ Leases are cooperative rather than operating-system locks. Independent filesyste
 
 ### Integration and delivery
 
-Task commits are retained under durable Git refs. The manager assembles eligible commits on a dedicated integration branch, runs validation, and creates a PR draft. It does not stash, reset, fast-forward, push, or merge the user's primary branch.
+Task commits are retained under durable Git refs. The manager normalizes each worker workspace into one provenance-rich commit, assembles eligible commits on a dedicated integration branch, runs validation, and builds the PR description directly from that evidence. It does not stash, reset, fast-forward, or merge the user's primary branch. Push and GitHub PR creation occur only when explicitly requested.
 
 ### Persistence
 
@@ -53,4 +53,4 @@ One SQLite database owns runs, tasks, attempts, bounded events, worker results, 
 - Validation discovery is Node-centric and custom commands intentionally use a shell.
 - Review is deterministic policy, not an independent semantic reviewer.
 - The Docker worker protocol is not yet controlled by the manager.
-- Remote delivery and crash-safe resume are intentionally out of scope for v0.1.
+- GitHub delivery currently depends directly on the authenticated `gh` CLI; hosting adapters, idempotent retries, and crash-safe resume are not yet implemented.

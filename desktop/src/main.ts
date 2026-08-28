@@ -337,6 +337,7 @@ function registerAgentIPC() {
       retries,
       timeoutMs: timeoutMinutes * 60_000,
       integrate: Boolean(input.integrate),
+      createPullRequest: Boolean(input.createPullRequest),
       ...(validationCommands.length ? { validationCommands } : {}),
     });
     return {
@@ -345,6 +346,7 @@ function registerAgentIPC() {
       ...(summary.integrationBranch
         ? { integrationBranch: summary.integrationBranch }
         : {}),
+      ...(summary.pullRequestUrl ? { pullRequestUrl: summary.pullRequestUrl } : {}),
       review: summary.review,
     };
   });
@@ -374,12 +376,14 @@ function registerAgentIPC() {
       retries,
       timeoutMs: timeoutMinutes * 60_000,
       integrate: Boolean(input.integrate),
+      createPullRequest: Boolean(input.createPullRequest),
       ...(validationCommands.length ? { validationCommands } : {}),
     });
     return {
       runId: summary.runId,
       status: summary.status,
       ...(summary.integrationBranch ? { integrationBranch: summary.integrationBranch } : {}),
+      ...(summary.pullRequestUrl ? { pullRequestUrl: summary.pullRequestUrl } : {}),
       review: summary.review,
     };
   });

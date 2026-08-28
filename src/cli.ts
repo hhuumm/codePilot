@@ -18,12 +18,13 @@ interface Options {
   timeoutMs: number;
   validationCommands?: string[];
   integrate: boolean;
+  createPullRequest: boolean;
 }
 
 function usage(): never {
   process.stderr.write(
     "Usage:\n" +
-      "  codepilot run <objective> [--repo <path>] [--agents codex,claude] [--retry <count>] [--timeout <seconds>] [--validate <command>] [--no-integrate] [--dry-run]\n" +
+      "  codepilot run <objective> [--repo <path>] [--agents codex,claude] [--retry <count>] [--timeout <seconds>] [--validate <command>] [--no-integrate] [--create-pr] [--dry-run]\n" +
       "  codepilot checkout acquire --owner <task-id> [--repo <path>] [--wait <seconds>] [--lease <seconds>] -- <paths...>\n" +
       "  codepilot checkout release --owner <task-id> [--repo <path>] [-- <paths...>]\n" +
       "  codepilot checkout renew --owner <task-id> [--repo <path>] [--lease <seconds>]\n" +
@@ -42,12 +43,14 @@ export function parseArgs(args: string[]): Options {
     retries: 0,
     timeoutMs: 30 * 60_000,
     integrate: true,
+    createPullRequest: false,
   };
 
   for (let index = 2; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--dry-run") options.dryRun = true;
     else if (arg === "--no-integrate") options.integrate = false;
+    else if (arg === "--create-pr") options.createPullRequest = true;
     else if (arg === "--retry" && args[index + 1]) {
       options.retries = Number.parseInt(args[++index]!, 10);
       if (!Number.isSafeInteger(options.retries) || options.retries < 0) usage();
@@ -64,6 +67,7 @@ export function parseArgs(args: string[]): Options {
       options.providers = requested as ProviderName[];
     } else usage();
   }
+  if (options.createPullRequest && (options.dryRun || !options.integrate)) usage();
   return options;
 }
 

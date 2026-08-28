@@ -57,6 +57,7 @@ export interface WorkerVerification {
 export interface WorkerResult {
   version: 0;
   taskId: string;
+  provider: ProviderName;
   externalId?: string;
   report?: WorkerReport;
   verification: WorkerVerification;
@@ -88,6 +89,7 @@ export interface RunRequest {
   timeoutMs?: number;
   validationCommands?: string[];
   integrate?: boolean;
+  createPullRequest?: boolean;
 }
 
 export interface PathCollision {
@@ -114,7 +116,8 @@ export interface RunSummary {
   status: RunStatus;
   baseCommit: string;
   integrationBranch?: string;
-  deliveryArtifact?: string;
+  pullRequestBody?: string;
+  pullRequestUrl?: string;
   taskResults: WorkerResult[];
   collisions: PathCollision[];
   validations: ValidationResult[];

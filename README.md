@@ -1,6 +1,6 @@
 # codePilot
 
-codePilot is a local control plane for coordinating Codex and Claude Code across Git repositories. It gives each coding agent an isolated checkout, persists its evidence, integrates eligible commits on a review branch, validates the combined result, and produces a pull-request draft—without silently changing your primary branch.
+codePilot is a local control plane for coordinating Codex and Claude Code across Git repositories. It gives each coding agent an isolated checkout, persists its handoff in Git commits, integrates eligible commits on a review branch, validates the combined result, and produces a pull-request description—without silently changing your primary branch.
 
 > **Public preview (v0.1):** the local execution path works end to end and is covered by integration tests. This is still developer tooling for trusted repositories, not a hardened sandbox for hostile code or unattended production use.
 
@@ -17,14 +17,14 @@ Coding agents are effective inside one task and one checkout. The harder problem
 - bounded JSONL event ingestion and SQLite-backed run history
 - manager-owned commits retained under `refs/codepilot/runs/...`
 - collision detection, integration branches, repository validation, and deterministic review
-- local PR drafts under `.codepilot/runs/<run-id>/pull-request.md`
+- Git-native task provenance and generated GitHub pull-request descriptions
 - an Electron desktop control plane for projects, task queues, knowledge, and live agent events
 
 ## Trust boundary
 
 Workers can run commands from a repository inside their temporary checkout. Validation commands are also user-configured shell commands. Use codePilot only with repositories and objectives you trust.
 
-codePilot filters parent conversation identifiers and common unrelated secrets from worker environments, bounds stored events and validation output, and never pushes or opens a remote pull request. These are guardrails, not a security sandbox. Read the [threat model](docs/threat-model.md) before live use.
+codePilot filters parent conversation identifiers and common unrelated secrets from worker environments and bounds stored events and validation output. Remote delivery is disabled unless a run explicitly requests `--create-pr`. These are guardrails, not a security sandbox. Read the [threat model](docs/threat-model.md) before live use.
 
 ## Requirements
 
@@ -61,7 +61,9 @@ npm run dev -- run "implement the requested change" `
 
 Repeat `--validate` to run multiple commands. Without explicit validation, codePilot discovers `check`, or `test`, `build`, and `lint` package scripts. Use `--no-integrate` to retain task commits and evidence without assembling a review branch.
 
-Successful changed runs create `codepilot/<run-id>`. Review that branch and its generated PR draft, then push or merge it yourself. codePilot does not mutate the checked-out primary branch or contact GitHub.
+Successful changed runs create `codepilot/<run-id>`. Each task becomes a manager-owned commit containing its agent outcome, claimed checks, concerns, follow-ups, and codePilot provenance. The combined run handoff is returned as `pullRequestBody`; no standalone Markdown draft is written to the project.
+
+Add `--create-pr` to explicitly push the integration branch and create a GitHub pull request using that generated description. Runs needing review are opened as drafts. Without this flag, codePilot does not contact GitHub.
 
 ## Desktop app
 

@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { promisify } from "node:util";
+import type { AgentTask, WorkerReport } from "./domain.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -43,7 +44,15 @@ export async function preserveTaskCommit(repo: string, runId: string, taskId: st
   await execFileAsync("git", ["-C", repo, "update-ref", `refs/codepilot/runs/${runId}/tasks/${taskId}`, commit]);
 }
 
-export async function commitWorkspaceChanges(workspace: string, taskId: string): Promise<boolean> {
+export async function commitWorkspaceChanges(
+  workspace: string,
+  task: AgentTask,
+  report?: WorkerReport,
+): Promise<boolean> {
+  // Normalize whatever the worker did into one manager-owned commit. This
+  // preserves the complete base-to-workspace diff while making the durable
+  // branch history independent of whether an agent created its own commits.
+  await execFileAsync("git", ["-C", workspace, "reset", "--soft", task.baseCommit]);
   await execFileAsync("git", ["-C", workspace, "add", "--all"]);
   await execFileAsync("git", ["-C", workspace, "reset", "--", ".codepilot-result.json"]);
   try {
@@ -59,10 +68,33 @@ export async function commitWorkspaceChanges(workspace: string, taskId: string):
       "user.email=codepilot@local",
       "commit",
       "-m",
-      `codepilot: task ${taskId}`,
+      `codepilot: task ${task.externalId ?? task.id}`,
+      "-m",
+      taskCommitBody(task, report),
     ]);
     return true;
   }
+}
+
+function taskCommitBody(task: AgentTask, report?: WorkerReport): string {
+  const list = (items: string[]): string => items
+    .slice(0, 20)
+    .map((item) => `- ${item.replaceAll("\0", "").trim().slice(0, 500)}`)
+    .join("\n");
+  const sections = [
+    report?.summary?.replaceAll("\0", "").trim().slice(0, 4_000) || "Worker changes captured by the codePilot manager.",
+    report?.claimedTests.length
+      ? `Claimed validation:\n${list(report.claimedTests)}`
+      : "Claimed validation:\n- Not reported",
+    report?.concerns.length
+      ? `Concerns:\n${list(report.concerns)}`
+      : undefined,
+    report?.followUps.length
+      ? `Follow-ups:\n${list(report.followUps)}`
+      : undefined,
+    `CodePilot-Run: ${task.runId}\nCodePilot-Task: ${task.externalId ?? task.id}\nCodePilot-Provider: ${task.provider}\nCodePilot-Outcome: ${report?.status ?? "unreported"}`,
+  ];
+  return sections.filter((section): section is string => Boolean(section)).join("\n\n");
 }
 
 export async function cherryPick(workspace: string, commit: string): Promise<void> {
