@@ -1,4 +1,4 @@
-import { ArrowTopRightOnSquareIcon, PlayIcon, StopIcon, XMarkIcon } from "@heroicons/react/24/outline";
+import { ArrowPathIcon, ArrowTopRightOnSquareIcon, PlayIcon, StopIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { useEffect, useRef, useState } from "react";
 import type { AppConfig, AppStatus } from "./types";
 
@@ -6,6 +6,7 @@ export function AppControl({ projectId, status, onStatus }: { projectId: string;
   const [config, setConfig] = useState<AppConfig>({ command: "", workingDirectory: ".", url: "http://localhost:3000" });
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
+  const [previewKey, setPreviewKey] = useState(0);
   const loaded = useRef(false);
   useEffect(() => {
     loaded.current = false;
@@ -36,6 +37,13 @@ export function AppControl({ projectId, status, onStatus }: { projectId: string;
       </section>
       <section className="flex min-h-96 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[.025]"><header className="border-b border-white/10 p-5 text-sm font-semibold">App output</header><pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap bg-black/20 p-5 text-[11px] leading-5 text-zinc-500">{status?.logs.length ? status.logs.join("") : "Start the app to see its output here."}</pre></section>
     </div>
+    <section className="mt-6 overflow-hidden rounded-2xl border border-white/10 bg-white/[.025]">
+      <header className="flex items-center justify-between gap-4 border-b border-white/10 px-5 py-4">
+        <div className="min-w-0"><h2 className="text-sm font-semibold">Live preview</h2><p className="mt-1 truncate font-mono text-[10px] text-zinc-600">{config.url || "Configure an app URL to enable preview"}</p></div>
+        <button disabled={!config.url} onClick={() => setPreviewKey(value => value + 1)} className="flex shrink-0 items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs text-zinc-300 hover:bg-white/5 disabled:opacity-40"><ArrowPathIcon className="size-3.5"/>Refresh</button>
+      </header>
+      {config.url ? <iframe key={`${config.url}-${previewKey}`} src={config.url} title="Project application preview" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-pointer-lock" referrerPolicy="no-referrer" className="h-[680px] w-full border-0 bg-zinc-950"/> : <div className="grid h-72 place-items-center text-sm text-zinc-600">No project URL configured.</div>}
+    </section>
   </div>;
 }
 
