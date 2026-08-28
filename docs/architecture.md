@@ -53,7 +53,7 @@ GitHub authentication is owned by the official `gh` CLI. The desktop launches it
 
 ### Persistence
 
-One SQLite database owns runs, tasks, attempts, bounded events, worker results, leases, and desktop project-manager records. Initialization is centralized and schema version is recorded with SQLite `user_version`. Interrupted running tasks are marked failed and their runs require review on desktop restart; automatic resume is not yet implemented.
+One SQLite database owns runs, tasks, attempts, bounded worker events, worker results, leases, desktop project-manager records, and App Core runtime history. Each app launch creates a session with its command, working directory, URL, start/end times, exit code, and stop reason. Timestamped stdout, stderr, and system events are hydrated after desktop restarts. Runtime retention is bounded to the latest 100 sessions and 20,000 events per project, while the App Core pane renders the latest 500 events. Initialization is centralized and schema version is recorded with SQLite `user_version`. Interrupted running tasks are marked failed and their runs require review on desktop restart; automatic resume is not yet implemented.
 
 ## Current limitations
 

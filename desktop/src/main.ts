@@ -55,6 +55,11 @@ import {
 } from "../../src/project-onboarding";
 import { removeProjectRegistration } from "../../src/project-registry";
 import { assertGitHubPublicationAllowed, parseGitHubAuthStatus, type GitHubStatus } from "../../src/github-auth";
+import {
+  AppLogStore,
+  formatAppLogEntry,
+  type AppLogStream,
+} from "../../src/app-log-store";
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
 if (started) app.quit();
@@ -64,7 +69,16 @@ const pmThreads = new Map<string, string>();
 const pmTurns = new KeyedSerialQueue();
 const pmActivity = new Map<string, number>();
 const appProcesses = new Map<string, ReturnType<typeof spawn>>();
-const appProcessState = new Map<string, { startedAt?: string; logs: string[] }>();
+type AppProcessRuntime = {
+  startedAt?: string;
+  sessionId?: string;
+  stopping?: boolean;
+  persistenceError?: boolean;
+  logs: string[];
+};
+const appProcessState = new Map<string, AppProcessRuntime>();
+const appLogStores = new Map<string, AppLogStore>();
+let appIsQuitting = false;
 const defaultGlobalSettings: GlobalSettings = { defaultProvider: "codex", scaffold: { mode: "guided", autoDeploy: false, onboardingPrompt: "You are onboarding me into a new project. Begin by asking focused questions about the users, problem, core workflow, constraints, technology preferences, and definition of success. Summarize decisions as we go. Create small implementation tasks only after requirements are agreed, then continue helping me shape and build the project incrementally." }, github: { allowWrites: false } };
 const file = () => join(app.getPath("userData"), "state.json");
 function load(): DesktopState {
@@ -324,6 +338,8 @@ function registerIPC() {
     state.runs = [];
     pmThreads.delete(project.id);
     appProcessState.delete(project.id);
+    appLogStores.get(project.id)?.close();
+    appLogStores.delete(project.id);
     save(state);
     return hydrate();
   });
@@ -498,8 +514,70 @@ function saveAppConfig(input: AppConfig, project: Project) {
   mkdirSync(dirname(appConfigPath(project)), { recursive: true });
   writeFileSync(appConfigPath(project), JSON.stringify({ command, workingDirectory, url }, null, 2));
 }
+function projectAppLogStore(project: Project): AppLogStore {
+  const existing = appLogStores.get(project.id);
+  if (existing) return existing;
+  const store = new AppLogStore(
+    join(project.repo, ".codepilot", "codepilot.db"),
+  );
+  appLogStores.set(project.id, store);
+  return store;
+}
+function persistedAppLogs(project: Project): string[] {
+  try {
+    return projectAppLogStore(project).recent(500).map(formatAppLogEntry);
+  } catch {
+    return [];
+  }
+}
+function appendAppLog(
+  project: Project,
+  state: AppProcessRuntime,
+  stream: AppLogStream,
+  payload: string,
+): void {
+  const timestamp = new Date().toISOString();
+  state.logs.push(formatAppLogEntry({ timestamp, stream, payload }));
+  state.logs = state.logs.slice(-500);
+  if (!state.sessionId || appIsQuitting) return;
+  try {
+    projectAppLogStore(project).append(
+      state.sessionId,
+      stream,
+      payload,
+      timestamp,
+    );
+  } catch (error) {
+    if (state.persistenceError) return;
+    state.persistenceError = true;
+    state.logs.push(
+      formatAppLogEntry({
+        timestamp: new Date().toISOString(),
+        stream: "system",
+        payload: `App log persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+      }),
+    );
+  }
+}
+function endAppLogSession(
+  project: Project,
+  state: AppProcessRuntime,
+  input: { exitCode?: number; reason: string },
+): void {
+  if (!state.sessionId) return;
+  try {
+    projectAppLogStore(project).endSession(state.sessionId, input);
+  } catch {
+    state.persistenceError = true;
+  }
+}
 function projectAppStatus(project: Project) {
-  const process = appProcesses.get(project.id), state = appProcessState.get(project.id) ?? { logs: [] };
+  const process = appProcesses.get(project.id);
+  let state = appProcessState.get(project.id);
+  if (!state) {
+    state = { logs: persistedAppLogs(project) };
+    appProcessState.set(project.id, state);
+  }
   return { configured: Boolean(readAppConfig(project).command), running: Boolean(process && process.exitCode === null), ...(process?.pid ? { pid: process.pid } : {}), ...(state.startedAt ? { startedAt: state.startedAt } : {}), config: readAppConfig(project), logs: state.logs };
 }
 function projectEnvironment(...directories: string[]): NodeJS.ProcessEnv {
@@ -527,23 +605,77 @@ function startProjectApp(project: Project) {
   if (!config.command) throw new Error("Configure a start command first");
   const cwd = resolve(project.repo, config.workingDirectory);
   if (!existsSync(cwd)) throw new Error("Configured working directory does not exist");
-  const state = { startedAt: new Date().toISOString(), logs: [] as string[] };
-  const child = spawn(config.command, { cwd, shell: true, windowsHide: true, env: { ...isolatedAgentEnvironment(), ...projectEnvironment(project.repo, cwd) } });
-  const append = (prefix: string, chunk: Buffer) => { state.logs.push(`${prefix}${chunk.toString("utf8")}`); state.logs = state.logs.slice(-200); };
-  child.stdout?.on("data", (chunk: Buffer) => append("", chunk));
-  child.stderr?.on("data", (chunk: Buffer) => append("[stderr] ", chunk));
-  child.once("error", (error) => state.logs.push(`[error] ${error.message}`));
-  child.once("exit", (code) => { state.logs.push(`[codePilot] App exited with code ${code ?? "unknown"}.`); appProcesses.delete(project.id); });
+  const startedAt = new Date().toISOString();
+  const journal = projectAppLogStore(project);
+  const sessionId = journal.startSession({
+    command: config.command,
+    workingDirectory: config.workingDirectory,
+    url: config.url,
+    startedAt,
+  });
+  const state: AppProcessRuntime = {
+    startedAt,
+    sessionId,
+    logs: journal.recent(500).map(formatAppLogEntry),
+  };
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(config.command, { cwd, shell: true, windowsHide: true, env: { ...isolatedAgentEnvironment(), ...projectEnvironment(project.repo, cwd) } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    journal.append(sessionId, "system", `App could not start: ${message}`);
+    journal.endSession(sessionId, { reason: "spawn-error" });
+    throw error;
+  }
+  appendAppLog(
+    project,
+    state,
+    "system",
+    `App started${child.pid ? ` with PID ${child.pid}` : ""}.`,
+  );
+  child.stdout?.on("data", (chunk: Buffer) =>
+    appendAppLog(project, state, "stdout", chunk.toString("utf8")),
+  );
+  child.stderr?.on("data", (chunk: Buffer) =>
+    appendAppLog(project, state, "stderr", chunk.toString("utf8")),
+  );
+  child.once("error", (error) => {
+    if (appIsQuitting) return;
+    appendAppLog(project, state, "system", `App error: ${error.message}`);
+    endAppLogSession(project, state, { reason: "spawn-error" });
+  });
+  child.once("exit", (code) => {
+    if (!appIsQuitting && !state.stopping)
+      appendAppLog(
+        project,
+        state,
+        "system",
+        `App exited with code ${code ?? "unknown"}.`,
+      );
+    if (!appIsQuitting)
+      endAppLogSession(project, state, {
+        ...(typeof code === "number" ? { exitCode: code } : {}),
+        reason: state.stopping ? "user-stop" : "process-exit",
+      });
+    if (appProcesses.get(project.id) === child)
+      appProcesses.delete(project.id);
+  });
   appProcesses.set(project.id, child); appProcessState.set(project.id, state);
   return projectAppStatus(project);
 }
 function stopProjectApp(project: Project) {
   const child = appProcesses.get(project.id);
   if (child?.pid) {
+    const state = appProcessState.get(project.id);
+    if (state) {
+      state.stopping = true;
+      appendAppLog(project, state, "system", "App stopped by user.");
+      endAppLogSession(project, state, { reason: "user-stop" });
+    }
     if (process.platform === "win32") { try { execFileSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }); } catch { child.kill(); } }
     else child.kill("SIGTERM");
-    appProcesses.delete(project.id);
-    appProcessState.get(project.id)?.logs.push("[codePilot] App stopped by user.");
+    if (appProcesses.get(project.id) === child)
+      appProcesses.delete(project.id);
   }
   return projectAppStatus(project);
 }
@@ -1302,9 +1434,26 @@ app.on("window-all-closed", () => {
 });
 app.on("before-quit", () => {
   pmServer.stop();
+  const projects = new Map(load().projects.map((project) => [project.id, project]));
+  for (const [projectId] of appProcesses) {
+    const project = projects.get(projectId);
+    const state = appProcessState.get(projectId);
+    if (!project || !state) continue;
+    state.stopping = true;
+    appendAppLog(
+      project,
+      state,
+      "system",
+      "App stopped because CodePilot is quitting.",
+    );
+    endAppLogSession(project, state, { reason: "codepilot-quit" });
+  }
+  appIsQuitting = true;
   for (const child of appProcesses.values()) {
     if (!child.pid) continue;
     if (process.platform === "win32") { try { execFileSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }); } catch { child.kill(); } }
     else child.kill("SIGTERM");
   }
+  for (const store of appLogStores.values()) store.close();
+  appLogStores.clear();
 });

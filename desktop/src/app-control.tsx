@@ -42,7 +42,7 @@ export function AppControl({ projectId, status, onStatus }: { projectId: string;
           <button disabled={!config.url} onClick={() => void window.codepilot.openProjectApp(projectId)} className="flex items-center gap-2 rounded-lg border border-white/10 px-4 py-2.5 text-sm text-zinc-300 disabled:opacity-40"><ArrowTopRightOnSquareIcon className="size-4" />Open app</button>
         </div>
       </section>
-      <section className="flex min-h-96 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[.025]"><header className="border-b border-white/10 p-5 text-sm font-semibold">App output</header><pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap bg-black/20 p-5 text-[11px] leading-5 text-zinc-500">{status?.logs.length ? status.logs.join("") : "Start the app to see its output here."}</pre></section>
+      <section className="flex min-h-96 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[.025]"><header className="flex items-center justify-between border-b border-white/10 p-5 text-sm font-semibold"><span>App output</span><span className="font-mono text-[9px] font-normal uppercase tracking-widest text-zinc-600">Persisted locally</span></header><pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap bg-black/20 p-5 text-[11px] leading-5 text-zinc-500">{status?.logs.length ? status.logs.join("") : "Start the app to see its output here."}</pre></section>
     </div>
   </div>;
 }
