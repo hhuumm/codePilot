@@ -74,7 +74,7 @@ npm run desktop:dev
 
 Build the Windows package with `npm run desktop:build`; output is written under `desktop/out/`. Automatic task deployment is off by default.
 
-The Projects screen can register an existing local Git checkout or clone an HTTPS/SSH remote into the configured projects directory. Credentials are never accepted in repository URLs; Git's configured credential helper or SSH agent owns authentication. Each registered repository has its own Project Manager thread, conversation, backlog, knowledge, and run database. Turns are serialized within one project while different projects can think and execute concurrently, even as the desktop switches between them.
+The Projects screen can register an existing local Git checkout or clone an HTTPS/SSH remote into the configured projects directory. Credentials are never accepted in repository URLs; Git's configured credential helper or SSH agent owns authentication. Each registered repository has its own Project Manager thread, conversation, backlog, knowledge, and run database. Turns are serialized within one project while different projects can think and execute concurrently, even as the desktop switches between them. Removing a project only unregisters it from the workspace; its repository and `.codepilot` data remain on disk so it can be onboarded again later.
 
 The older local Next.js dashboard is deliberately absent from the public tree because it contains a separately licensed UI kit. Electron is the supported public UI.
 

@@ -53,6 +53,7 @@ import {
   repositoryNameFromRemote,
   suggestedProjectName,
 } from "../../src/project-onboarding";
+import { removeProjectRegistration } from "../../src/project-registry";
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
 if (started) app.quit();
@@ -261,6 +262,23 @@ function registerIPC() {
     const project: Project = existing ?? { id: randomUUID(), name, repo, createdAt: new Date().toISOString() };
     if (!existing) state.projects.push(project);
     state.activeProjectId = project.id;
+    save(state);
+    return hydrate();
+  });
+  ipcMain.handle("project:remove", (_event, projectId: string) => {
+    const state = load();
+    const project = state.projects.find((candidate) => candidate.id === projectId);
+    if (!project) throw new Error("Project not found. Refresh the workspace and try again.");
+    const activity = projectActivity()[project.id] ?? 0;
+    const appProcess = appProcesses.get(project.id);
+    if (activity > 0 || appProcess?.exitCode === null)
+      throw new Error("Stop this project's PM, agents, and app process before removing it.");
+    const next = removeProjectRegistration(state.projects, state.activeProjectId, project.id);
+    state.projects = next.projects;
+    state.activeProjectId = next.activeProjectId;
+    state.runs = [];
+    pmThreads.delete(project.id);
+    appProcessState.delete(project.id);
     save(state);
     return hydrate();
   });

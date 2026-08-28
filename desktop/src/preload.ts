@@ -11,6 +11,7 @@ const api: CodePilotAPI = {
   selectDirectory: (defaultPath) => ipcRenderer.invoke("dialog:directory", defaultPath),
   addProject: (input) => ipcRenderer.invoke("project:add", input),
   onboardProject: (input) => ipcRenderer.invoke("project:onboard", input),
+  removeProject: (projectId) => ipcRenderer.invoke("project:remove", projectId),
   switchProject: (id) => ipcRenderer.invoke("project:switch", id),
   openProjectDirectory: (projectId) => ipcRenderer.invoke("project:open-directory", projectId),
   getAppStatus: (projectId) => ipcRenderer.invoke("app:status", projectId),

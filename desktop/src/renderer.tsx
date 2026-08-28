@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { ArrowsPointingInIcon, ArrowsPointingOutIcon, BoltIcon, ChevronLeftIcon, ChevronRightIcon, CircleStackIcon, ClipboardDocumentListIcon, Cog6ToothIcon, CommandLineIcon, FolderIcon, PlayIcon, QueueListIcon, SignalIcon, Squares2X2Icon, StopIcon, WrenchScrewdriverIcon } from "@heroicons/react/24/outline";
+import { ArrowsPointingInIcon, ArrowsPointingOutIcon, BoltIcon, ChevronLeftIcon, ChevronRightIcon, CircleStackIcon, ClipboardDocumentListIcon, Cog6ToothIcon, CommandLineIcon, FolderIcon, PlayIcon, QueueListIcon, SignalIcon, Squares2X2Icon, StopIcon, TrashIcon, WrenchScrewdriverIcon } from "@heroicons/react/24/outline";
 import type { AppStatus, DesktopState, PMTask } from "./types";
 import { Agents } from "./agents";
 import { ActiveAgents } from "./active-agents";
@@ -86,6 +86,13 @@ function App() {
     setView("pm");
   }
   async function switchProject(projectId: string) { const nextProject = state?.projects.find((project) => project.id === projectId); if (!nextProject || nextProject.id === active.id) return; setProjectTransition({ from: active.name, to: nextProject.name }); setOnboardingMessage(undefined); try { setState(await window.codepilot.switchProject(projectId)); } finally { window.setTimeout(() => setProjectTransition(undefined), 650); } }
+  async function removeProject(projectId: string, projectName: string) {
+    if (!window.confirm(`Remove "${projectName}" from codePilot?\n\nThe repository and its .codepilot data will stay on disk.`)) return;
+    setError("");
+    setOnboardingMessage(undefined);
+    try { setState(await window.codepilot.removeProject(projectId)); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  }
   async function add() { try { const settings=await window.codepilot.getGlobalSettings();const scaffold=settings.scaffold??{mode:"guided",autoDeploy:true,onboardingPrompt:"Help me define the requirements for this new project."};const projectName=name.trim();const next=await window.codepilot.addProject({name:projectName});setState(next);setName("");setError("");if(scaffold.mode==="guided"){setOnboardingMessage(`We just created a new project named ${projectName}. ${scaffold.onboardingPrompt}`);setView("pm")}else setOnboardingMessage(undefined); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }
   async function finishRepositoryOnboarding(next: DesktopState, source: "local"|"remote") {
     const project = next.projects.find((candidate) => candidate.id === next.activeProjectId)!;
@@ -134,9 +141,9 @@ function App() {
         <PM key={active.id} projectId={active.id} initialMessage={onboardingMessage} triageMessage={triageMessage} triageTaskIds={triageTaskIds} visible={view === "pm"} projectName={active.name} expanded={pmExpanded} onExpand={() => setPMExpanded(value => !value)} />
       </div>
       {view === "pm" ? null : view === "tasks" ? <TaskBoard key={active.id} projectId={active.id} projectName={active.name} onTriage={triageTasks} onReviewProject={reviewProject} /> : view === "agents" ? <Agents key={active.id} projectId={active.id} onState={setState} /> : view === "active-agents" ? <ActiveAgents key={active.id} projectId={active.id} /> : view === "runtime" ? <AppControl key={active.id} projectId={active.id} status={appStatus} onStatus={setAppStatus} /> : view === "knowledge" ? <Knowledge key={active.id} projectId={active.id} /> : view === "project-settings" ? <ProjectSettings projectId={active.id} projectName={active.name}/> : view === "settings" ? <Settings state={state} onState={setState} /> : view === "projects" ? <>
-        <Title eyebrow="Workspace registry" title="Projects" text={`Create or switch projects under ${state.projectsDirectory}.`} />
+        <Title eyebrow="Workspace registry" title="Projects" text={`Create, switch, or unregister projects under ${state.projectsDirectory}.`} />
         <div className="mt-8 grid grid-cols-[1fr_420px] gap-6">
-          <div className="space-y-3">{state.projects.map((project) => <button key={project.id} onClick={() => {setOnboardingMessage(undefined);void switchProject(project.id)}} className={`w-full rounded-xl border p-5 text-left ${project.id === active.id ? "border-indigo-400/30 bg-indigo-400/10" : "border-white/10 bg-white/[.025]"}`}><div className="flex items-center justify-between gap-4"><div className="font-medium">{project.name}</div>{Boolean(projectActivity[project.id])&&<span className="flex items-center gap-2 rounded-full bg-emerald-400/10 px-2.5 py-1 text-[10px] font-semibold uppercase text-emerald-300"><span className="size-1.5 animate-pulse rounded-full bg-emerald-400 shadow-[0_0_7px_rgba(52,211,153,.7)]"/>{projectActivity[project.id]} working</span>}</div><div className="mt-2 truncate font-mono text-[10px] text-zinc-600">{project.repo}</div></button>)}</div>
+          <div className="space-y-3">{state.projects.map((project) => <div key={project.id} className={`flex overflow-hidden rounded-xl border ${project.id === active.id ? "border-indigo-400/30 bg-indigo-400/10" : "border-white/10 bg-white/[.025]"}`}><button onClick={() => {setOnboardingMessage(undefined);void switchProject(project.id)}} className="min-w-0 flex-1 p-5 text-left"><div className="flex items-center justify-between gap-4"><div className="font-medium">{project.name}</div>{Boolean(projectActivity[project.id])&&<span className="flex items-center gap-2 rounded-full bg-emerald-400/10 px-2.5 py-1 text-[10px] font-semibold uppercase text-emerald-300"><span className="size-1.5 animate-pulse rounded-full bg-emerald-400 shadow-[0_0_7px_rgba(52,211,153,.7)]"/>{projectActivity[project.id]} working</span>}</div><div className="mt-2 truncate font-mono text-[10px] text-zinc-600">{project.repo}</div></button><button disabled={state.projects.length === 1} onClick={() => void removeProject(project.id, project.name)} title={state.projects.length === 1 ? "CodePilot needs at least one registered project" : "Remove from codePilot"} className="grid w-14 shrink-0 place-items-center border-l border-white/10 text-zinc-600 hover:bg-red-400/10 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-25 disabled:hover:bg-transparent disabled:hover:text-zinc-600"><TrashIcon className="size-4"/><span className="sr-only">Remove {project.name} from codePilot</span></button></div>)}</div>
           <div className="space-y-4">
             <section className="rounded-2xl border border-indigo-400/20 bg-indigo-400/[.04] p-6">
               <div className="text-[10px] font-semibold uppercase tracking-[.2em] text-indigo-400">Repository onboarding</div>
