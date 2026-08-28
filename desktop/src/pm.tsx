@@ -6,7 +6,7 @@ import {
   ArrowsPointingInIcon,
 } from "@heroicons/react/24/outline";
 import type { PMState, PMTask } from "./types";
-export function PM({ initialMessage, triageMessage, triageTaskIds = [], visible, projectName, expanded, onExpand }: { initialMessage?: string; triageMessage?: string; triageTaskIds?: string[]; visible: boolean; projectName: string; expanded?: boolean; onExpand?: () => void }) {
+export function PM({ projectId, initialMessage, triageMessage, triageTaskIds = [], visible, projectName, expanded, onExpand }: { projectId: string; initialMessage?: string; triageMessage?: string; triageTaskIds?: string[]; visible: boolean; projectName: string; expanded?: boolean; onExpand?: () => void }) {
   const [state, setState] = useState<PMState>(),
     [message, setMessage] = useState(""),
     [queue, setQueue] = useState<string[]>([]),
@@ -21,8 +21,8 @@ export function PM({ initialMessage, triageMessage, triageTaskIds = [], visible,
     autonomousReviewQueued = useRef(false),
     chat = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    void window.codepilot.getPM().then(setState);
-  }, []);
+    void window.codepilot.getPM(projectId).then(setState);
+  }, [projectId]);
   useEffect(() => { if (initialMessage && !onboardingStarted.current) { onboardingStarted.current = true; setQueue([initialMessage]); } }, [initialMessage]);
   useEffect(() => {
     if (!triageMessage || triageMessage === lastTriageMessage.current) return;
@@ -38,7 +38,7 @@ export function PM({ initialMessage, triageMessage, triageTaskIds = [], visible,
     processing.current = true;
     setBusy(true);
     void window.codepilot
-      .chatPM(next)
+      .chatPM(projectId, next)
       .then(async (nextState) => {
         setState(nextState);
         const settings = await window.codepilot.getGlobalSettings();
@@ -80,7 +80,7 @@ export function PM({ initialMessage, triageMessage, triageTaskIds = [], visible,
     )
       return;
     setQueue([]);
-    setState(await window.codepilot.clearPMChat());
+    setState(await window.codepilot.clearPMChat(projectId));
   }
   async function launch(task: PMTask, provider: "codex" | "claude") {
     if (dispatchedTaskIdsRef.current.has(task.id)) return;
@@ -94,9 +94,10 @@ export function PM({ initialMessage, triageMessage, triageTaskIds = [], visible,
     setDispatchedTaskIds((items) => new Set(items).add(task.id));
     setError("");
     try {
-      setState(await window.codepilot.setPMTaskStatus(task.id, "launched"));
+      setState(await window.codepilot.setPMTaskStatus(projectId, task.id, "launched"));
       void window.codepilot
         .runAgents({
+          projectId,
           objective: `${task.title}\n\ncodePilot PM task: ${task.id}\nQueue: ${task.queueTitle}\n\n${task.description}\n\nAcceptance criteria:\n${task.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`,
           providers: [provider],
           retries: 0,
@@ -108,7 +109,7 @@ export function PM({ initialMessage, triageMessage, triageTaskIds = [], visible,
         .then(async (result) => {
           if (result.status === "completed") {
             const summary = result.review.findings.length ? result.review.findings.join(" ") : `Agent run completed with review verdict: ${result.review.verdict}.`;
-            const nextState = await window.codepilot.setPMTaskStatus(task.id, "done", summary);
+            const nextState = await window.codepilot.setPMTaskStatus(projectId, task.id, "done", summary);
             setState(nextState);
             const settings = await window.codepilot.getGlobalSettings();
             const readyTasks = nextState.tasks.filter((item) => item.status === "ready" && !dispatchedTaskIdsRef.current.has(item.id));
@@ -118,7 +119,7 @@ export function PM({ initialMessage, triageMessage, triageTaskIds = [], visible,
             if (!readyTasks.length) queueAutonomousReview(`Completed "${task.title}". ${summary}`);
           } else {
             const reason = result.review.findings.length ? result.review.findings.join(" ") : `The agent run returned ${result.status} with review verdict ${result.review.verdict}.`;
-            setState(await window.codepilot.recordPMTaskFailure(task.id, `Task did not advance because it was not eligible for completion: ${reason}`));
+            setState(await window.codepilot.recordPMTaskFailure(projectId, task.id, `Task did not advance because it was not eligible for completion: ${reason}`));
             restoreForTriage();
             queueAutonomousReview(`"${task.title}" needs re-triage after ${result.status}: ${reason}`);
             setError(
@@ -128,21 +129,21 @@ export function PM({ initialMessage, triageMessage, triageTaskIds = [], visible,
         })
         .catch(async (cause) => {
           setError(cause instanceof Error ? cause.message : String(cause));
-          setState(await window.codepilot.recordPMTaskFailure(task.id, `Task did not advance because the agent run failed: ${cause instanceof Error ? cause.message : String(cause)}`));
+          setState(await window.codepilot.recordPMTaskFailure(projectId, task.id, `Task did not advance because the agent run failed: ${cause instanceof Error ? cause.message : String(cause)}`));
           restoreForTriage();
           queueAutonomousReview(`"${task.title}" failed: ${cause instanceof Error ? cause.message : String(cause)}`);
         })
         .finally(() => setLaunching((items) => { const next = new Set(items); next.delete(task.id); return next; }));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
-      try { setState(await window.codepilot.recordPMTaskFailure(task.id, `Task did not advance because launch failed: ${cause instanceof Error ? cause.message : String(cause)}`)); } catch {}
+      try { setState(await window.codepilot.recordPMTaskFailure(projectId, task.id, `Task did not advance because launch failed: ${cause instanceof Error ? cause.message : String(cause)}`)); } catch {}
       restoreForTriage();
       queueAutonomousReview(`"${task.title}" could not launch: ${cause instanceof Error ? cause.message : String(cause)}`);
       setLaunching((items) => { const next = new Set(items); next.delete(task.id); return next; });
     }
   }
   async function requeueTask(task: PMTask) {
-    setState(await window.codepilot.setPMTaskStatus(task.id, "ready", "Requeued from the Project Manager recent work list."));
+    setState(await window.codepilot.setPMTaskStatus(projectId, task.id, "ready", "Requeued from the Project Manager recent work list."));
     setTriagedTaskIds((items) => { const next = new Set(items); next.delete(task.id); return next; });
     setDispatchedTaskIds((items) => { const next = new Set(items); next.delete(task.id); return next; });
     dispatchedTaskIdsRef.current.delete(task.id);

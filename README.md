@@ -18,7 +18,7 @@ Coding agents are effective inside one task and one checkout. The harder problem
 - manager-owned commits retained under `refs/codepilot/runs/...`
 - collision detection, integration branches, repository validation, and deterministic review
 - Git-native task provenance and generated GitHub pull-request descriptions
-- an Electron desktop control plane for projects, task queues, knowledge, and live agent events
+- an Electron desktop control plane with local/remote Git onboarding, project-scoped PM threads, task queues, knowledge, and live agent events
 
 ## Trust boundary
 
@@ -30,6 +30,7 @@ codePilot filters parent conversation identifiers and common unrelated secrets f
 
 - Node.js 22+
 - Git
+- GitHub CLI for repository cloning and pull-request publication
 - Codex CLI and/or Claude Code, already installed and authenticated
 - Windows, macOS, or Linux for the CLI; the packaged desktop flow is currently Windows-first
 
@@ -73,6 +74,10 @@ npm run desktop:dev
 ```
 
 Build the Windows package with `npm run desktop:build`; output is written under `desktop/out/`. Automatic task deployment is off by default.
+
+The Projects screen can register an existing local Git checkout or clone an HTTPS/SSH remote into the configured projects directory. Credentials are never accepted in repository URLs; Git's configured credential helper or SSH agent owns authentication. After registration, onboarding asks the operator to review the App Core start command, repository-relative working directory, and local URL before Project Manager begins; this step saves configuration but never launches the app. Each registered repository has its own Project Manager thread, conversation, backlog, knowledge, and run database. Turns are serialized within one project while different projects can think and execute concurrently, even as the desktop switches between them. Removing a project only unregisters it from the workspace; its repository and `.codepilot` data remain on disk so it can be onboarded again later.
+
+Settings includes a GitHub connection panel backed by the official `gh` browser login. GitHub CLI stores the credential in the operating-system credential store; codePilot receives only redacted account/status metadata. GitHub writes require both the global **Allow GitHub write operations** switch and an explicit **Create GitHub pull request** selection for that deployment. Today those writes are limited to pushing the generated integration branch and opening its pull request—codePilot does not merge, delete, change repository settings, or grant access.
 
 The older local Next.js dashboard is deliberately absent from the public tree because it contains a separately licensed UI kit. Electron is the supported public UI.
 

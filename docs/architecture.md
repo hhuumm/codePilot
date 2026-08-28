@@ -19,6 +19,14 @@ The manager owns authoritative orchestration state: scheduling, attempts, timeou
 
 Runs targeting the same repository are serialized in one manager process. Tasks within a run may execute concurrently when their dependency graph permits it.
 
+### Desktop project controllers
+
+Every project-scoped desktop request carries an explicit project ID across the typed preload bridge. The main process resolves that ID before reading PM state, changing tasks, launching agents, inspecting runs, curating knowledge, or controlling the project runtime. Switching the visible project therefore cannot retarget an in-flight operation.
+
+Project Manager threads are keyed by project ID and persisted inside their repository. A keyed queue serializes turns for one PM so multiple windows or queued messages cannot race its conversation state; different project keys may run concurrently through the shared Codex app-server. The Projects screen reports PM and worker activity across the registry.
+
+Repository onboarding either canonicalizes an existing local Git root or clones an explicit HTTPS/SSH remote into the configured projects directory. Existing repositories receive `.codepilot/` in their local Git exclude file, avoiding an onboarding-only source change. Git authentication remains delegated to the operator's credential helper or SSH agent. A post-registration launch step reads any existing or inferred App Core configuration and asks the operator to review the start command, repository-relative working directory, and local URL. Saving this step persists `.codepilot/app-config.json` but deliberately does not start a process; guided Project Manager onboarding begins only after the operator saves or skips it. Removing a project only unregisters it from the desktop workspace; the repository and `.codepilot` state are preserved, and removal is blocked while that project's PM, agents, or app process is active.
+
 ### Provider adapters
 
 Adapters translate the stable `AgentTask` contract into official CLI arguments. Authentication remains owned by each provider CLI. Parent conversation identifiers and common unrelated credential variables are removed from child environments; the selected provider's authentication variable may be forwarded.
@@ -39,7 +47,9 @@ Leases are cooperative rather than operating-system locks. Independent filesyste
 
 ### Integration and delivery
 
-Task commits are retained under durable Git refs. The manager normalizes each worker workspace into one provenance-rich commit, assembles eligible commits on a dedicated integration branch, runs validation, and builds the PR description directly from that evidence. It does not stash, reset, fast-forward, or merge the user's primary branch. Push and GitHub PR creation occur only when explicitly requested.
+Task commits are retained under durable Git refs. The manager normalizes each worker workspace into one provenance-rich commit, assembles eligible commits on a dedicated integration branch, runs validation, and builds the PR description directly from that evidence. It does not stash, reset, fast-forward, or merge the user's primary branch. Push and GitHub PR creation occur only when explicitly requested and the operator has enabled GitHub writes in Settings.
+
+GitHub authentication is owned by the official `gh` CLI. The desktop launches its browser/device flow and reads only redacted `gh auth status` output; it never receives a token. The main process checks both authenticated status and the global write policy immediately before any requested publication.
 
 ### Persistence
 
@@ -54,3 +64,4 @@ One SQLite database owns runs, tasks, attempts, bounded events, worker results, 
 - Review is deterministic policy, not an independent semantic reviewer.
 - The Docker worker protocol is not yet controlled by the manager.
 - GitHub delivery currently depends directly on the authenticated `gh` CLI; hosting adapters, idempotent retries, and crash-safe resume are not yet implemented.
+- Multiple repositories can operate independently, but one coordinated initiative spanning their task graphs and delivery policies is not yet implemented.
