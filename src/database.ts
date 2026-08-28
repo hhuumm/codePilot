@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
-export const DATABASE_VERSION = 2;
+export const DATABASE_VERSION = 3;
 
 /**
  * Own the complete project-control schema in one place. Every process may open
@@ -61,6 +61,28 @@ export function initializeDatabase(database: DatabaseSync): void {
       expires_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS file_checkouts_owner ON file_checkouts(owner);
+    CREATE TABLE IF NOT EXISTS app_sessions (
+      id TEXT PRIMARY KEY,
+      command TEXT NOT NULL,
+      working_directory TEXT NOT NULL,
+      url TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      ended_at TEXT,
+      exit_code INTEGER,
+      stop_reason TEXT
+    );
+    CREATE INDEX IF NOT EXISTS app_sessions_started_at_idx
+      ON app_sessions(started_at DESC);
+    CREATE TABLE IF NOT EXISTS app_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      timestamp TEXT NOT NULL,
+      stream TEXT NOT NULL CHECK(stream IN ('stdout', 'stderr', 'system')),
+      payload TEXT NOT NULL,
+      FOREIGN KEY(session_id) REFERENCES app_sessions(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS app_events_session_id_idx
+      ON app_events(session_id, id);
     CREATE TABLE IF NOT EXISTS pm_tasks (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,

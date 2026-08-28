@@ -42,6 +42,7 @@ codePilot v0.1 is local developer tooling for repositories, objectives, provider
 - Validation commands use a shell and can execute arbitrary operator-supplied text.
 - Cooperative file leases do not prevent a provider from ignoring the protocol.
 - SQLite state is local and is not tamper-evident.
+- App Core stdout and stderr are retained locally in the project database. Applications should not print credentials or other secrets; retained logs must be inspected before sharing `.codepilot/` data.
 - The experimental Docker files do not yet represent an enforced manager-owned sandbox.
 - Explicit GitHub publication uses the current user's authenticated `gh` and Git credentials to push the generated branch and open a pull request. Repository permissions are enforced by GitHub, not codePilot.
 - Explicit repository cloning runs Git with the current user's network access and credentials; the cloned repository remains untrusted until the operator reviews it.

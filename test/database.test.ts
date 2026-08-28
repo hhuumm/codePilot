@@ -33,6 +33,15 @@ test("upgrades the legacy task schema and records its database version", async (
   assert.ok(columns.has("external_id"));
   assert.ok(columns.has("dependencies"));
   assert.ok(columns.has("attempts"));
+  const tables = new Set(
+    (
+      database
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .all() as Array<Record<string, unknown>>
+    ).map((row) => String(row.name)),
+  );
+  assert.ok(tables.has("app_sessions"));
+  assert.ok(tables.has("app_events"));
   const version = database.prepare("PRAGMA user_version").get() as Record<string, unknown>;
   assert.equal(Number(version.user_version), DATABASE_VERSION);
 });
