@@ -1,4 +1,5 @@
 # codePilot
+<img width="1400" height="927" alt="image" src="https://github.com/user-attachments/assets/40c49c18-de69-4aa0-acdf-93ee2a22ba87" />
 
 codePilot is a local control plane for coordinating Codex and Claude Code across Git repositories. It gives each coding agent an isolated checkout, persists its evidence, integrates eligible commits on a review branch, validates the combined result, and produces a pull-request draft—without silently changing your primary branch.
 
