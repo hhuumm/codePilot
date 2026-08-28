@@ -19,7 +19,17 @@ class FixtureProvider implements ProviderAdapter {
     this.lastTask = task;
     await writeFile(join(task.workspace, "result.txt"), "implemented\n");
     await execFileAsync("git", ["-C", task.workspace, "add", "result.txt"]);
-    await execFileAsync("git", ["-C", task.workspace, "commit", "-m", "worker result"]);
+    await execFileAsync("git", [
+      "-C",
+      task.workspace,
+      "-c",
+      "user.name=Fixture Worker",
+      "-c",
+      "user.email=fixture@example.com",
+      "commit",
+      "-m",
+      "worker result",
+    ]);
     await writeFile(
       task.reportPath,
       JSON.stringify({
