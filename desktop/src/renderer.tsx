@@ -80,8 +80,9 @@ function App() {
     return () => { mounted = false; window.clearInterval(timer); };
   }, [state?.activeProjectId]);
   if (!state) return <div className="grid h-full place-items-center text-zinc-500">Starting codePilot…</div>;
-  state.globalSettings ??= { defaultProvider: "codex", scaffold: { mode: "guided", autoDeploy: true, onboardingPrompt: "" } };
+  state.globalSettings ??= { defaultProvider: "codex", scaffold: { mode: "guided", autoDeploy: true, onboardingPrompt: "" }, github: { allowWrites: false } };
   state.globalSettings.scaffold ??= { mode: "guided", autoDeploy: true, onboardingPrompt: "" };
+  state.globalSettings.github ??= { allowWrites: false };
   const active = state.projects.find((project) => project.id === state.activeProjectId)!;
   const projectsDirectory = state.projectsDirectory;
   const sidebarCompact = sidebarCollapsed || windowWidth < 1180;

@@ -32,6 +32,8 @@ codePilot v0.1 is local developer tooling for repositories, objectives, provider
 - Electron context isolation and a typed preload bridge
 - explicit project IDs on desktop PM, task, agent, knowledge, run, and runtime operations
 - HTTPS/SSH-only remote onboarding without embedded URL credentials; authentication stays with Git's credential helper or SSH agent
+- GitHub browser authentication is delegated to the official `gh` CLI; tokens never cross the Electron preload bridge or enter codePilot state
+- remote writes require a persisted global opt-in plus an explicit per-run pull-request request
 
 ## Known risks
 
@@ -41,7 +43,7 @@ codePilot v0.1 is local developer tooling for repositories, objectives, provider
 - Cooperative file leases do not prevent a provider from ignoring the protocol.
 - SQLite state is local and is not tamper-evident.
 - The experimental Docker files do not yet represent an enforced manager-owned sandbox.
-- Explicit GitHub publication uses the current user's authenticated `gh` and Git credentials to push the generated branch and open a pull request.
+- Explicit GitHub publication uses the current user's authenticated `gh` and Git credentials to push the generated branch and open a pull request. Repository permissions are enforced by GitHub, not codePilot.
 - Explicit repository cloning runs Git with the current user's network access and credentials; the cloned repository remains untrusted until the operator reviews it.
 
 ## Operator guidance

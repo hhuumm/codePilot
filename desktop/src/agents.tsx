@@ -13,9 +13,10 @@ export function Agents({ projectId, onState }: { projectId: string; onState(stat
     [error, setError] = useState(""),
     [results, setResults] = useState<AgentRunResult[]>([]);
   const [pmState, setPMState] = useState<PMState>();
+  const [githubReady, setGitHubReady] = useState(false);
   const [showAllTasks, setShowAllTasks] = useState(false);
   const [poofing, setPoofing] = useState<Set<string>>(() => new Set());
-  useEffect(() => { void window.codepilot.getGlobalSettings().then((settings) => { setCodex(settings.defaultProvider === "codex"); setClaude(settings.defaultProvider === "claude"); }); }, []);
+  useEffect(() => { void Promise.all([window.codepilot.getGlobalSettings(), window.codepilot.getGitHubStatus()]).then(([settings, status]) => { setCodex(settings.defaultProvider === "codex"); setClaude(settings.defaultProvider === "claude"); setGitHubReady(status.authenticated && settings.github.allowWrites); }); }, []);
   useEffect(() => { let active = true; const refresh = () => void window.codepilot.getPM(projectId).then((next) => active && setPMState(next)); refresh(); const timer = window.setInterval(refresh, 2000); return () => { active = false; window.clearInterval(timer); }; }, [projectId]);
   async function deployTask(task: PMTask) { setError(""); try { setPMState(await window.codepilot.setPMTaskStatus(projectId, task.id, "launched")); setPoofing((items) => new Set(items).add(task.id)); await new Promise((resolve) => window.setTimeout(resolve, 900)); const result = await window.codepilot.runAgents({ projectId, objective: `${task.title}\n\ncodePilot PM task: ${task.id}\n\n${task.description}\n\nAcceptance criteria:\n${task.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`, providers: [task.recommendedProvider === "claude" ? "claude" : "codex"], retries: 0, timeoutMinutes: 30, validationCommands: [], integrate, createPullRequest, dryRun }); setResults((current) => [result, ...current].slice(0, 5)); const nextStatus = result.status === "completed" ? "done" : "ready"; const summary = result.review.findings.length ? result.review.findings.join(" ") : `Task did not advance because the agent run returned ${result.status} with review verdict ${result.review.verdict}.`; setPMState(await window.codepilot.setPMTaskStatus(projectId, task.id, nextStatus, summary)); } catch (cause) { const reason = cause instanceof Error ? cause.message : String(cause); setError(reason); try { setPMState(await window.codepilot.setPMTaskStatus(projectId, task.id, "ready", `Task did not advance because deployment failed: ${reason}`)); } catch {} } finally { setPoofing((items) => { const next = new Set(items); next.delete(task.id); return next; }); } }
   async function launch() {
@@ -118,8 +119,9 @@ export function Agents({ projectId, onState }: { projectId: string; onState(stat
               set={setIntegrate}
             />
             <Check
-              label="Create GitHub pull request"
+              label={githubReady ? "Create GitHub pull request" : "Connect GitHub in Settings to publish"}
               checked={createPullRequest}
+              disabled={!githubReady}
               set={(value) => { setCreatePullRequest(value); if (value) { setIntegrate(true); setDryRun(false); } }}
             />
             <Check label="Dry run only" checked={dryRun} set={setDryRun} />
@@ -154,16 +156,19 @@ function Check({
   label,
   checked,
   set,
+  disabled = false,
 }: {
   label: string;
   checked: boolean;
   set(value: boolean): void;
+  disabled?: boolean;
 }) {
   return (
-    <label className="mb-3 flex cursor-pointer items-center justify-between text-sm text-zinc-300">
+    <label className={`mb-3 flex items-center justify-between text-sm text-zinc-300 ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}>
       <span>{label}</span>
       <input
         type="checkbox"
+        disabled={disabled}
         checked={checked}
         onChange={(e) => set(e.target.checked)}
         className="size-4 accent-indigo-500"

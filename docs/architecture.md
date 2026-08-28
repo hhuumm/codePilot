@@ -47,7 +47,9 @@ Leases are cooperative rather than operating-system locks. Independent filesyste
 
 ### Integration and delivery
 
-Task commits are retained under durable Git refs. The manager normalizes each worker workspace into one provenance-rich commit, assembles eligible commits on a dedicated integration branch, runs validation, and builds the PR description directly from that evidence. It does not stash, reset, fast-forward, or merge the user's primary branch. Push and GitHub PR creation occur only when explicitly requested.
+Task commits are retained under durable Git refs. The manager normalizes each worker workspace into one provenance-rich commit, assembles eligible commits on a dedicated integration branch, runs validation, and builds the PR description directly from that evidence. It does not stash, reset, fast-forward, or merge the user's primary branch. Push and GitHub PR creation occur only when explicitly requested and the operator has enabled GitHub writes in Settings.
+
+GitHub authentication is owned by the official `gh` CLI. The desktop launches its browser/device flow and reads only redacted `gh auth status` output; it never receives a token. The main process checks both authenticated status and the global write policy immediately before any requested publication.
 
 ### Persistence
 

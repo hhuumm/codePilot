@@ -54,6 +54,7 @@ import {
   suggestedProjectName,
 } from "../../src/project-onboarding";
 import { removeProjectRegistration } from "../../src/project-registry";
+import { assertGitHubPublicationAllowed, parseGitHubAuthStatus, type GitHubStatus } from "../../src/github-auth";
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
 if (started) app.quit();
@@ -64,7 +65,7 @@ const pmTurns = new KeyedSerialQueue();
 const pmActivity = new Map<string, number>();
 const appProcesses = new Map<string, ReturnType<typeof spawn>>();
 const appProcessState = new Map<string, { startedAt?: string; logs: string[] }>();
-const defaultGlobalSettings: GlobalSettings = { defaultProvider: "codex", scaffold: { mode: "guided", autoDeploy: false, onboardingPrompt: "You are onboarding me into a new project. Begin by asking focused questions about the users, problem, core workflow, constraints, technology preferences, and definition of success. Summarize decisions as we go. Create small implementation tasks only after requirements are agreed, then continue helping me shape and build the project incrementally." } };
+const defaultGlobalSettings: GlobalSettings = { defaultProvider: "codex", scaffold: { mode: "guided", autoDeploy: false, onboardingPrompt: "You are onboarding me into a new project. Begin by asking focused questions about the users, problem, core workflow, constraints, technology preferences, and definition of success. Summarize decisions as we go. Create small implementation tasks only after requirements are agreed, then continue helping me shape and build the project incrementally." }, github: { allowWrites: false } };
 const file = () => join(app.getPath("userData"), "state.json");
 function load(): DesktopState {
   try {
@@ -92,7 +93,7 @@ function save(state: DesktopState) {
 }
 function hydrate() {
   const state = load();
-  state.globalSettings = { ...defaultGlobalSettings, ...state.globalSettings, scaffold: { ...defaultGlobalSettings.scaffold, ...state.globalSettings?.scaffold } };
+  state.globalSettings = { ...defaultGlobalSettings, ...state.globalSettings, scaffold: { ...defaultGlobalSettings.scaffold, ...state.globalSettings?.scaffold }, github: { ...defaultGlobalSettings.github, ...state.globalSettings?.github } };
   const
     project =
       state.projects.find((item) => item.id === state.activeProjectId) ??
@@ -117,6 +118,48 @@ function hydrate() {
     }
   }
   return state;
+}
+function githubStatus(): GitHubStatus {
+  try {
+    execFileSync("gh", ["--version"], { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  } catch {
+    return { installed: false, authenticated: false, host: "github.com", scopes: [], error: "GitHub CLI is not installed or is not available on PATH" };
+  }
+  try {
+    const output = execFileSync("gh", ["auth", "status", "--hostname", "github.com"], { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    return { installed: true, ...parseGitHubAuthStatus(output) };
+  } catch {
+    return { installed: true, authenticated: false, host: "github.com", scopes: [], error: "Connect a GitHub account to publish branches and pull requests" };
+  }
+}
+async function loginGitHub(): Promise<GitHubStatus> {
+  if (!githubStatus().installed) throw new Error("Install GitHub CLI before connecting a GitHub account");
+  await new Promise<void>((resolveLogin, rejectLogin) => {
+    const child = spawn("gh", ["auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web", "--clipboard", "--scopes", "workflow"], {
+      windowsHide: true,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    const timeout = setTimeout(() => {
+      child.kill();
+      rejectLogin(new Error("GitHub sign-in timed out. Start it again when you are ready to finish in the browser."));
+    }, 10 * 60_000);
+    child.once("error", () => {
+      clearTimeout(timeout);
+      rejectLogin(new Error("GitHub sign-in could not start. Confirm that GitHub CLI is installed."));
+    });
+    child.once("close", (code) => {
+      clearTimeout(timeout);
+      if (code === 0) resolveLogin();
+      else rejectLogin(new Error("GitHub sign-in did not complete. No credentials were stored by CodePilot."));
+    });
+  });
+  execFileSync("gh", ["auth", "setup-git", "--hostname", "github.com"], { windowsHide: true, stdio: "ignore" });
+  const status = githubStatus();
+  if (!status.authenticated) throw new Error("GitHub CLI did not report a connected account after sign-in");
+  return status;
+}
+function assertGitHubWriteAccess() {
+  assertGitHubPublicationAllowed(Boolean(load().globalSettings?.github?.allowWrites), githubStatus());
 }
 function recoverInterruptedRuns() {
   for (const project of load().projects) {
@@ -185,12 +228,14 @@ function registerIPC() {
   ipcMain.handle("project:brief-get",(_event,projectId:string)=>projectBrief(projectById(projectId)));
   ipcMain.handle("project:brief-save",(_event,projectId:string,content:string)=>saveProjectBrief(projectById(projectId),String(content).slice(0,100000)));
   ipcMain.handle("projects:activity",()=>projectActivity());
-  ipcMain.handle("settings:get", () => ({ ...defaultGlobalSettings, ...load().globalSettings, scaffold: { ...defaultGlobalSettings.scaffold, ...load().globalSettings?.scaffold } }));
+  ipcMain.handle("settings:get", () => ({ ...defaultGlobalSettings, ...load().globalSettings, scaffold: { ...defaultGlobalSettings.scaffold, ...load().globalSettings?.scaffold }, github: { ...defaultGlobalSettings.github, ...load().globalSettings?.github } }));
   ipcMain.handle("settings:save", (_event, settings: GlobalSettings) => {
     const state = load();
-    state.globalSettings = { defaultProvider: settings.defaultProvider === "claude" ? "claude" : "codex", scaffold: { mode: settings.scaffold?.mode === "blank" ? "blank" : "guided", autoDeploy: Boolean(settings.scaffold?.autoDeploy), onboardingPrompt: String(settings.scaffold?.onboardingPrompt || defaultGlobalSettings.scaffold.onboardingPrompt).trim().slice(0, 12000) } };
+    state.globalSettings = { defaultProvider: settings.defaultProvider === "claude" ? "claude" : "codex", scaffold: { mode: settings.scaffold?.mode === "blank" ? "blank" : "guided", autoDeploy: Boolean(settings.scaffold?.autoDeploy), onboardingPrompt: String(settings.scaffold?.onboardingPrompt || defaultGlobalSettings.scaffold.onboardingPrompt).trim().slice(0, 12000) }, github: { allowWrites: Boolean(settings.github?.allowWrites) } };
     save(state); return state.globalSettings;
   });
+  ipcMain.handle("github:status", () => githubStatus());
+  ipcMain.handle("github:login", () => loginGitHub());
   ipcMain.handle("run:detail", (_event, projectId: string, id: string) => runDetail(projectById(projectId), id));
   ipcMain.handle("app:status", (_event, projectId: string) => projectAppStatus(projectById(projectId)));
   ipcMain.handle("app:save-config", (_event, projectId: string, config: AppConfig) => {
@@ -340,6 +385,7 @@ function registerAgentIPC() {
   });
   ipcMain.handle("agents:run", async (_event, input: AgentRunInput) => {
     const project = projectById(input.projectId);
+    if (input.createPullRequest) assertGitHubWriteAccess();
     if (typeof project.repo !== "string" || !project.repo.trim()) throw new Error("The selected project has no repository path. Re-select the project or add it again before deploying an agent.");
     const
       objective = input.objective.trim(),
@@ -380,6 +426,7 @@ function registerAgentIPC() {
   });
   ipcMain.handle("agents:run-batch", async (_event, input: AgentBatchRunInput) => {
     const project = projectById(input.projectId);
+    if (input.createPullRequest) assertGitHubWriteAccess();
     if (!project.repo?.trim()) throw new Error("The selected project has no repository path.");
     const items = input.items.slice(0, 20).map((item) => ({
       id: item.id.trim(),
