@@ -1,15 +1,15 @@
-name: CI
+name: Dependency Audit
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  schedule:
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  verify:
+  audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -21,8 +21,8 @@ jobs:
             package-lock.json
             desktop/package-lock.json
       - run: npm ci
-      - run: npm run check
+      - run: npm audit --omit=dev
       - run: npm ci
         working-directory: desktop
-      - run: npm run typecheck
+      - run: npm audit --omit=dev
         working-directory: desktop
