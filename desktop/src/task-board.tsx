@@ -19,7 +19,7 @@ export function TaskBoard({ projectId, projectName, onTriage, onReviewProject }:
   const commitTaskBin = window.codepilot.commitPMTaskBin;
   useEffect(() => {
     let active = true;
-    const refresh = () => void window.codepilot.getPM().then((next) => active && setState(next));
+    const refresh = () => void window.codepilot.getPM(projectId).then((next) => active && setState(next));
     refresh();
     const timer = window.setInterval(refresh, 2000);
     return () => { active = false; window.clearInterval(timer); };
@@ -42,8 +42,8 @@ export function TaskBoard({ projectId, projectName, onTriage, onReviewProject }:
     setRequeueingColumn(column.title);
     try {
       for (const task of column.tasks)
-        await window.codepilot.setPMTaskStatus(task.id, "ready", `Requeued from the ${column.title} task-board column.`);
-      setState(await window.codepilot.getPM());
+        await window.codepilot.setPMTaskStatus(projectId, task.id, "ready", `Requeued from the ${column.title} task-board column.`);
+      setState(await window.codepilot.getPM(projectId));
     } finally {
       setRequeueingColumn("");
     }
@@ -52,7 +52,7 @@ export function TaskBoard({ projectId, projectName, onTriage, onReviewProject }:
     if (requeueingColumn) return;
     setRequeueingColumn("Blocked");
     try {
-      setState(await window.codepilot.getPM());
+      setState(await window.codepilot.getPM(projectId));
     } finally {
       setRequeueingColumn("");
     }
@@ -62,8 +62,9 @@ export function TaskBoard({ projectId, projectName, onTriage, onReviewProject }:
     setRunningReady(true);
     try {
       for (const task of readyTasks)
-        setState(await window.codepilot.setPMTaskStatus(task.id, "launched"));
+        setState(await window.codepilot.setPMTaskStatus(projectId, task.id, "launched"));
       const result = await window.codepilot.runAgentBatch({
+        projectId,
         objective: `Task Board coordinated delivery batch (${readyTasks.length} tasks)`,
         items: readyTasks.map((task) => ({
           id: task.id,
@@ -79,14 +80,14 @@ export function TaskBoard({ projectId, projectName, onTriage, onReviewProject }:
       const summary = result.review.findings.length ? result.review.findings.join(" ") : `Coordinated batch completed with review verdict: ${result.review.verdict}.`;
       for (const task of readyTasks)
         setState(result.status === "completed"
-          ? await window.codepilot.setPMTaskStatus(task.id, "done", summary)
-          : await window.codepilot.recordPMTaskFailure(task.id, summary));
-      setState(await window.codepilot.getPM());
+          ? await window.codepilot.setPMTaskStatus(projectId, task.id, "done", summary)
+          : await window.codepilot.recordPMTaskFailure(projectId, task.id, summary));
+      setState(await window.codepilot.getPM(projectId));
     } catch (cause) {
       const reason = cause instanceof Error ? cause.message : String(cause);
       for (const task of readyTasks)
         try {
-          setState(await window.codepilot.recordPMTaskFailure(task.id, `Coordinated batch failed before delivery: ${reason}`));
+          setState(await window.codepilot.recordPMTaskFailure(projectId, task.id, `Coordinated batch failed before delivery: ${reason}`));
         } catch {}
     } finally {
       setRunningReady(false);
@@ -97,9 +98,9 @@ export function TaskBoard({ projectId, projectName, onTriage, onReviewProject }:
     <div className="text-xs font-semibold uppercase tracking-[.2em] text-indigo-400">Project planning</div>
     <div className="mt-2 flex items-center justify-between gap-4"><div className="flex items-center gap-3"><h1 className="text-2xl font-semibold">Suggested tasks</h1><button onClick={onReviewProject} className="rounded-lg border border-violet-400/30 bg-violet-400/10 px-3 py-2 text-xs font-semibold text-violet-200 hover:bg-violet-400/15">Review</button></div><button disabled={!selectedTaskIds.length || Boolean(commitMessage)} onClick={async () => { setCommitMessage("Committing…"); try {
       if (typeof commitTaskBin !== "function") throw new Error("The desktop bridge is out of date. Restart codePilot, then try the commit again.");
-      const bin = await commitTaskBin(selectedTaskIds);
+      const bin = await commitTaskBin(projectId, selectedTaskIds);
       setCommitMessage(`Bin ${bin.hash} · commit ${bin.commit.slice(0, 8)}`);
-      setState(await window.codepilot.getPM());
+      setState(await window.codepilot.getPM(projectId));
       if (selected && bin.taskIds.includes(selected.task.id)) setSelected(undefined);
       setSelectedTaskIds([]);
     } catch (cause) { setCommitMessage(cause instanceof Error ? cause.message : String(cause)); } finally { window.setTimeout(() => setCommitMessage(""), 5000); } }} className="rounded-lg border border-indigo-400/30 bg-indigo-400/10 px-3 py-2 text-xs font-semibold text-indigo-200 disabled:cursor-not-allowed disabled:opacity-40">Commit selected tasks</button></div>
@@ -111,15 +112,15 @@ export function TaskBoard({ projectId, projectName, onTriage, onReviewProject }:
           <span className="rounded-full bg-white/[.07] px-2.5 py-1 text-xs font-medium text-zinc-300">{column.tasks.length}</span>
         </header>
         <div className="h-[312px] min-h-0 w-full flex-none space-y-2 overflow-y-auto overscroll-contain p-3 [scrollbar-gutter:stable]">
-          {column.tasks.map((task) => <TaskCard key={task.id} task={task} expanded={expandedTaskIds.includes(task.id)} loading={loading === task.id} dependencyTitles={task.dependencies.map((id) => allTasks.find((candidate) => candidate.id === id)?.title ?? id)} onContext={(event) => { event.preventDefault(); event.stopPropagation(); setContext({ task, x: event.clientX, y: event.clientY }); }} onToggle={() => setExpandedTaskIds((ids) => ids.includes(task.id) ? ids.filter((id) => id !== task.id) : [...ids, task.id])} onOpen={async () => { setLoading(task.id); try { setSelected(await window.codepilot.getPMTaskDetail(task.id)); } finally { setLoading(""); } }} />)}
+          {column.tasks.map((task) => <TaskCard key={task.id} task={task} expanded={expandedTaskIds.includes(task.id)} loading={loading === task.id} dependencyTitles={task.dependencies.map((id) => allTasks.find((candidate) => candidate.id === id)?.title ?? id)} onContext={(event) => { event.preventDefault(); event.stopPropagation(); setContext({ task, x: event.clientX, y: event.clientY }); }} onToggle={() => setExpandedTaskIds((ids) => ids.includes(task.id) ? ids.filter((id) => id !== task.id) : [...ids, task.id])} onOpen={async () => { setLoading(task.id); try { setSelected(await window.codepilot.getPMTaskDetail(projectId, task.id)); } finally { setLoading(""); } }} />)}
           {!column.tasks.length && <div className="grid h-32 place-items-center rounded-xl border border-dashed border-white/10 text-xs text-zinc-600">No tasks here</div>}
         </div>
       </section>)}
     </div>
     {commitMessage && <p className="mt-2 text-xs text-zinc-400">{commitMessage}</p>}
-    <AllTasksView tasks={tasks} open={allTasksOpen} setOpen={setAllTasksOpen} selectedTaskIds={selectedTaskIds} setSelectedTaskIds={setSelectedTaskIds} onSelect={async (task) => { setLoading(task.id); try { setSelected(await window.codepilot.getPMTaskDetail(task.id)); } finally { setLoading(""); } }} />
-    {selected && <TaskDrawer detail={selected} close={() => setSelected(undefined)} revise={async () => { setState(await window.codepilot.setPMTaskStatus(selected.task.id, "ready", "Marked for revision after review.")); setSelected(undefined); }} />}
-    {context && <TaskContextMenu task={context.task} x={context.x} y={context.y} close={() => setContext(undefined)} onState={setState} onTriage={(task) => onTriage([task])} />}
+    <AllTasksView tasks={tasks} open={allTasksOpen} setOpen={setAllTasksOpen} selectedTaskIds={selectedTaskIds} setSelectedTaskIds={setSelectedTaskIds} onSelect={async (task) => { setLoading(task.id); try { setSelected(await window.codepilot.getPMTaskDetail(projectId, task.id)); } finally { setLoading(""); } }} />
+    {selected && <TaskDrawer detail={selected} close={() => setSelected(undefined)} revise={async () => { setState(await window.codepilot.setPMTaskStatus(projectId, selected.task.id, "ready", "Marked for revision after review.")); setSelected(undefined); }} />}
+    {context && <TaskContextMenu projectId={projectId} task={context.task} x={context.x} y={context.y} close={() => setContext(undefined)} onState={setState} onTriage={(task) => onTriage([task])} />}
   </div>;
 }
 
@@ -191,13 +192,13 @@ function TaskDrawer({ detail, close, revise }: { detail: PMTaskDetail; close(): 
 
 function Pill({ value }: { value: string }) { return <span className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">{value.replace("_", " ")}</span>; }
 
-function TaskContextMenu({ task, x, y, close, onState, onTriage }: { task: PMTask; x: number; y: number; close(): void; onState(state: PMState): void; onTriage(task: PMTask): void }) {
-  const api = window.codepilot as typeof window.codepilot & { deletePMTask: (id: string) => Promise<PMState> };
+function TaskContextMenu({ projectId, task, x, y, close, onState, onTriage }: { projectId: string; task: PMTask; x: number; y: number; close(): void; onState(state: PMState): void; onTriage(task: PMTask): void }) {
+  const api = window.codepilot;
   const [busy, setBusy] = useState(false);
   useEffect(() => { if (busy) close(); }, [busy]);
-  async function requeue() { setBusy(true); try { onState(await window.codepilot.setPMTaskStatus(task.id, "ready", "Requeued manually from the task board.")); close(); } finally { setBusy(false); } }
+  async function requeue() { setBusy(true); try { onState(await window.codepilot.setPMTaskStatus(projectId, task.id, "ready", "Requeued manually from the task board.")); close(); } finally { setBusy(false); } }
   function triage() { close(); onTriage(task); }
-  async function remove() { if (!confirm(`Delete task “${task.title}”?`)) return; setBusy(true); try { onState(await api.deletePMTask(task.id)); close(); } finally { setBusy(false); } }
-  async function run() { setBusy(true); try { onState(await window.codepilot.setPMTaskStatus(task.id, "launched")); const result = await window.codepilot.runAgents({ objective: `${task.title}\n\n${task.description}\n\nAcceptance criteria:\n${task.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`, providers: [task.recommendedProvider === "claude" ? "claude" : "codex"], retries: 0, timeoutMinutes: 30, validationCommands: [], integrate: true, dryRun: false }); const summary = result.review.findings.length ? result.review.findings.join(" ") : `Agent run completed with review verdict: ${result.review.verdict}.`; onState(result.status === "completed" ? await window.codepilot.setPMTaskStatus(task.id, "done", summary) : await window.codepilot.recordPMTaskFailure(task.id, summary)); close(); } catch (cause) { const reason = cause instanceof Error ? cause.message : String(cause); try { onState(await window.codepilot.recordPMTaskFailure(task.id, `Task did not advance because the run failed: ${reason}`)); } catch {} close(); } finally { setBusy(false); } }
+  async function remove() { if (!confirm(`Delete task “${task.title}”?`)) return; setBusy(true); try { onState(await api.deletePMTask(projectId, task.id)); close(); } finally { setBusy(false); } }
+  async function run() { setBusy(true); try { onState(await window.codepilot.setPMTaskStatus(projectId, task.id, "launched")); const result = await window.codepilot.runAgents({ projectId, objective: `${task.title}\n\n${task.description}\n\nAcceptance criteria:\n${task.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`, providers: [task.recommendedProvider === "claude" ? "claude" : "codex"], retries: 0, timeoutMinutes: 30, validationCommands: [], integrate: true, dryRun: false }); const summary = result.review.findings.length ? result.review.findings.join(" ") : `Agent run completed with review verdict: ${result.review.verdict}.`; onState(result.status === "completed" ? await window.codepilot.setPMTaskStatus(projectId, task.id, "done", summary) : await window.codepilot.recordPMTaskFailure(projectId, task.id, summary)); close(); } catch (cause) { const reason = cause instanceof Error ? cause.message : String(cause); try { onState(await window.codepilot.recordPMTaskFailure(projectId, task.id, `Task did not advance because the run failed: ${reason}`)); } catch {} close(); } finally { setBusy(false); } }
   return <div onClick={(event) => event.stopPropagation()} style={{ left: Math.min(x, window.innerWidth - 190), top: Math.min(y, window.innerHeight - 130) }} className="fixed z-[70] w-44 overflow-hidden rounded-xl border border-white/10 bg-zinc-900 py-1 shadow-2xl ring-1 ring-black/50">{["ready", "backlog"].includes(task.status) && <button disabled={busy} onClick={() => void run()} className="w-full px-3 py-2 text-left text-xs text-indigo-200 hover:bg-indigo-500/15 disabled:opacity-40">Run task</button>}<button disabled={busy} onClick={triage} className="w-full px-3 py-2 text-left text-xs text-violet-200 hover:bg-violet-500/15 disabled:opacity-40">Triage in PM</button><button disabled={busy} onClick={() => void requeue()} className="w-full px-3 py-2 text-left text-xs text-zinc-200 hover:bg-indigo-500/15 disabled:opacity-40">Requeue task</button><button disabled={busy} onClick={() => void remove()} className="w-full px-3 py-2 text-left text-xs text-rose-300 hover:bg-rose-500/15 disabled:opacity-40">Delete task</button></div>;
 }

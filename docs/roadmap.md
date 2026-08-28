@@ -7,7 +7,7 @@
 - durable SQLite run evidence and bounded logs
 - cooperative file leases
 - integration branches, validation, review verdicts, Git-native handoffs, and opt-in GitHub pull requests
-- Electron project and task control plane
+- Electron project and task control plane with Git repository onboarding and concurrent project-scoped PMs
 - CI, security policy, and public documentation
 
 ## v0.2 — reviewable planning

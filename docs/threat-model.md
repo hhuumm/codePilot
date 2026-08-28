@@ -16,7 +16,7 @@ codePilot v0.1 is local developer tooling for repositories, objectives, provider
 - The manager is trusted and owns commits, integration, persistence, and policy.
 - Provider processes are semi-trusted: they may edit and execute inside a temporary checkout, but their reports are advisory.
 - Repository code and configured validation commands are trusted by the operator.
-- Remote Git hosting is contacted only when the operator explicitly requests pull-request creation for a run.
+- Remote Git hosting is contacted only when the operator explicitly clones a repository or requests pull-request creation for a run.
 
 ## Existing mitigations
 
@@ -30,6 +30,8 @@ codePilot v0.1 is local developer tooling for repositories, objectives, provider
 - bounded process lines, event counts, database event history, validation output, artifact count, and artifact size
 - timeouts on providers and validation commands
 - Electron context isolation and a typed preload bridge
+- explicit project IDs on desktop PM, task, agent, knowledge, run, and runtime operations
+- HTTPS/SSH-only remote onboarding without embedded URL credentials; authentication stays with Git's credential helper or SSH agent
 
 ## Known risks
 
@@ -40,6 +42,7 @@ codePilot v0.1 is local developer tooling for repositories, objectives, provider
 - SQLite state is local and is not tamper-evident.
 - The experimental Docker files do not yet represent an enforced manager-owned sandbox.
 - Explicit GitHub publication uses the current user's authenticated `gh` and Git credentials to push the generated branch and open a pull request.
+- Explicit repository cloning runs Git with the current user's network access and credentials; the cloned repository remains untrusted until the operator reviews it.
 
 ## Operator guidance
 

@@ -18,7 +18,7 @@ Coding agents are effective inside one task and one checkout. The harder problem
 - manager-owned commits retained under `refs/codepilot/runs/...`
 - collision detection, integration branches, repository validation, and deterministic review
 - Git-native task provenance and generated GitHub pull-request descriptions
-- an Electron desktop control plane for projects, task queues, knowledge, and live agent events
+- an Electron desktop control plane with local/remote Git onboarding, project-scoped PM threads, task queues, knowledge, and live agent events
 
 ## Trust boundary
 
@@ -73,6 +73,8 @@ npm run desktop:dev
 ```
 
 Build the Windows package with `npm run desktop:build`; output is written under `desktop/out/`. Automatic task deployment is off by default.
+
+The Projects screen can register an existing local Git checkout or clone an HTTPS/SSH remote into the configured projects directory. Credentials are never accepted in repository URLs; Git's configured credential helper or SSH agent owns authentication. Each registered repository has its own Project Manager thread, conversation, backlog, knowledge, and run database. Turns are serialized within one project while different projects can think and execute concurrently, even as the desktop switches between them.
 
 The older local Next.js dashboard is deliberately absent from the public tree because it contains a separately licensed UI kit. Electron is the supported public UI.
 
