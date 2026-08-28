@@ -22,6 +22,13 @@ export function AppControl({ projectId, status, onStatus }: { projectId: string;
     <div className="text-xs font-semibold uppercase tracking-[.2em] text-indigo-400">Project runtime</div>
     <div className="mt-3 flex items-center gap-4"><span className={`runtime-glyph runtime-glyph-large ${status?.running ? "runtime-glyph-on" : ""}`} aria-hidden="true"><span className="runtime-orbit" /><span className="runtime-core" /><span className="runtime-node runtime-node-a" /><span className="runtime-node runtime-node-b" /><span className="runtime-node runtime-node-c" /></span><div><div className="flex items-baseline gap-3"><h1 className="font-mono text-2xl font-semibold tracking-wide">APP CORE</h1><span className={`font-mono text-sm font-semibold tracking-[.22em] ${status?.running ? "text-emerald-300" : "text-zinc-600"}`}>// {status?.running ? "ON" : "OFF"}</span></div><div className={`mt-1 flex items-center gap-1 ${status?.running ? "text-emerald-400/60" : "text-zinc-700"}`} aria-hidden="true"><span className="core-signal h-1" /><span className="core-signal h-2" /><span className="core-signal h-3" /><span className="core-signal h-1.5" /><span className="ml-2 font-mono text-[9px] tracking-widest">{status?.running ? "PROCESS LINK ACTIVE" : "PROCESS LINK DORMANT"}</span></div></div></div>
     <p className="mt-2 text-sm text-zinc-400">Configure how codePilot launches this project. The PM can update these values when you ask it to configure the app.</p>
+    {config.url && <section className="mt-8 overflow-hidden rounded-2xl border border-white/10 bg-white/[.025]">
+      <header className="flex items-center justify-between gap-4 border-b border-white/10 px-5 py-4">
+        <div className="min-w-0"><h2 className="text-sm font-semibold">Live preview</h2><p className="mt-1 truncate font-mono text-[10px] text-zinc-600">{config.url}</p></div>
+        <button onClick={() => setPreviewKey(value => value + 1)} className="flex shrink-0 items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs text-zinc-300 hover:bg-white/5"><ArrowPathIcon className="size-3.5"/>Refresh</button>
+      </header>
+      <iframe key={`${config.url}-${previewKey}`} src={config.url} title="Project application preview" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-pointer-lock" referrerPolicy="no-referrer" className="h-[680px] w-full border-0 bg-zinc-950"/>
+    </section>}
     <div className="mt-8 grid grid-cols-[minmax(0,1fr)_minmax(320px,.8fr)] gap-6">
       <section className="rounded-2xl border border-white/10 bg-white/[.025] p-6">
         <div className="flex items-center justify-between"><h2 className="text-sm font-semibold">Launch configuration</h2><span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase ${status?.running ? "bg-emerald-400/10 text-emerald-300" : "bg-zinc-400/10 text-zinc-500"}`}>{status?.running ? `Running · ${status.pid}` : "Stopped"}</span></div>
@@ -37,13 +44,6 @@ export function AppControl({ projectId, status, onStatus }: { projectId: string;
       </section>
       <section className="flex min-h-96 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[.025]"><header className="border-b border-white/10 p-5 text-sm font-semibold">App output</header><pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap bg-black/20 p-5 text-[11px] leading-5 text-zinc-500">{status?.logs.length ? status.logs.join("") : "Start the app to see its output here."}</pre></section>
     </div>
-    <section className="mt-6 overflow-hidden rounded-2xl border border-white/10 bg-white/[.025]">
-      <header className="flex items-center justify-between gap-4 border-b border-white/10 px-5 py-4">
-        <div className="min-w-0"><h2 className="text-sm font-semibold">Live preview</h2><p className="mt-1 truncate font-mono text-[10px] text-zinc-600">{config.url || "Configure an app URL to enable preview"}</p></div>
-        <button disabled={!config.url} onClick={() => setPreviewKey(value => value + 1)} className="flex shrink-0 items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs text-zinc-300 hover:bg-white/5 disabled:opacity-40"><ArrowPathIcon className="size-3.5"/>Refresh</button>
-      </header>
-      {config.url ? <iframe key={`${config.url}-${previewKey}`} src={config.url} title="Project application preview" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-pointer-lock" referrerPolicy="no-referrer" className="h-[680px] w-full border-0 bg-zinc-950"/> : <div className="grid h-72 place-items-center text-sm text-zinc-600">No project URL configured.</div>}
-    </section>
   </div>;
 }
 
