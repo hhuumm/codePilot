@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -19,7 +19,17 @@ class FixtureProvider implements ProviderAdapter {
     this.lastTask = task;
     await writeFile(join(task.workspace, "result.txt"), "implemented\n");
     await execFileAsync("git", ["-C", task.workspace, "add", "result.txt"]);
-    await execFileAsync("git", ["-C", task.workspace, "commit", "-m", "worker result"]);
+    await execFileAsync("git", [
+      "-C",
+      task.workspace,
+      "-c",
+      "user.name=Fixture Worker",
+      "-c",
+      "user.email=fixture@example.com",
+      "commit",
+      "-m",
+      "worker result",
+    ]);
     await writeFile(
       task.reportPath,
       JSON.stringify({
@@ -141,7 +151,7 @@ class PrimaryMovingFixtureProvider implements ProviderAdapter {
   }
 }
 
-test("runs a worker, preserves its commit, integrates it, and writes a delivery artifact", async () => {
+test("runs a worker, preserves its commit, and builds a Git-native delivery handoff", async () => {
   const root = await mkdtemp(join(tmpdir(), "codepilot-manager-"));
   const repo = join(root, "repo");
   await execFileAsync("git", ["init", repo]);
@@ -165,11 +175,21 @@ test("runs a worker, preserves its commit, integrates it, and writes a delivery 
   assert.equal(summary.review.verdict, "ready");
   assert.match(summary.integrationBranch!, /^codepilot\//);
   assert.equal(summary.taskResults[0]?.verification.changedPaths[0], "result.txt");
-  await access(summary.deliveryArtifact!);
+  assert.match(summary.pullRequestBody ?? "", /Added the fixture result/);
+  assert.match(summary.pullRequestBody ?? "", /result\.txt/);
   const { stdout } = await execFileAsync("git", ["-C", repo, "show", `${summary.integrationBranch}:result.txt`]);
   assert.equal(stdout, "implemented\n");
+  const { stdout: commitMessage } = await execFileAsync("git", ["-C", repo, "log", "-1", "--format=%B", summary.integrationBranch!]);
+  assert.match(commitMessage, /CodePilot-Run:/);
+  assert.match(commitMessage, /CodePilot-Provider: codex/);
+  const { stdout: commitCount } = await execFileAsync("git", ["-C", repo, "rev-list", "--count", `HEAD..${summary.integrationBranch}`]);
+  assert.equal(commitCount.trim(), "1");
+  await assert.rejects(access(join(repo, ".codepilot", "runs", summary.runId, "pull-request.md")));
   await assert.rejects(execFileAsync("git", ["-C", repo, "show", "HEAD:result.txt"]));
-  assert.equal(resolve(provider.lastTask?.coordinationRepo ?? ""), resolve(repo));
+  assert.equal(
+    (await realpath(resolve(provider.lastTask?.coordinationRepo ?? ""))).toLowerCase(),
+    (await realpath(resolve(repo))).toLowerCase(),
+  );
   assert.ok(provider.lastTask?.checkoutCommand);
 });
 

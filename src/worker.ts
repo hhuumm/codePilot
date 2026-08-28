@@ -22,6 +22,7 @@ const facts = await inspectWorktree(request.task.workspace, request.task.baseCom
 const result: WorkerResult = {
   version: 0,
   taskId: request.task.id,
+  provider: request.task.provider,
   ...(report.report ? { report: report.report } : {}),
   verification: {
     processExitCode: agentResult.exitCode,

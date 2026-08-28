@@ -24,6 +24,7 @@ import type {
   NewPMTask,
   TaskBin,
   Project,
+  ProjectOnboardingInput,
 } from "./types";
 import { Manager } from "../../src/manager";
 import type { ProviderName } from "../../src/domain";
@@ -45,15 +46,26 @@ import {
   savePMTasks,
 } from "../../src/pm-store";
 import { CodexAppServer } from "./codex-app-server";
+import { KeyedSerialQueue } from "../../src/keyed-queue";
+import {
+  canonicalGitRepository,
+  cloneGitRepository,
+  repositoryNameFromRemote,
+  suggestedProjectName,
+} from "../../src/project-onboarding";
+import { removeProjectRegistration } from "../../src/project-registry";
+import { assertGitHubPublicationAllowed, parseGitHubAuthStatus, type GitHubStatus } from "../../src/github-auth";
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
 if (started) app.quit();
 let window: BrowserWindow | null = null;
 const pmServer = new CodexAppServer();
 const pmThreads = new Map<string, string>();
+const pmTurns = new KeyedSerialQueue();
+const pmActivity = new Map<string, number>();
 const appProcesses = new Map<string, ReturnType<typeof spawn>>();
 const appProcessState = new Map<string, { startedAt?: string; logs: string[] }>();
-const defaultGlobalSettings: GlobalSettings = { defaultProvider: "codex", scaffold: { mode: "guided", autoDeploy: false, onboardingPrompt: "You are onboarding me into a new project. Begin by asking focused questions about the users, problem, core workflow, constraints, technology preferences, and definition of success. Summarize decisions as we go. Create small implementation tasks only after requirements are agreed, then continue helping me shape and build the project incrementally." } };
+const defaultGlobalSettings: GlobalSettings = { defaultProvider: "codex", scaffold: { mode: "guided", autoDeploy: false, onboardingPrompt: "You are onboarding me into a new project. Begin by asking focused questions about the users, problem, core workflow, constraints, technology preferences, and definition of success. Summarize decisions as we go. Create small implementation tasks only after requirements are agreed, then continue helping me shape and build the project incrementally." }, github: { allowWrites: false } };
 const file = () => join(app.getPath("userData"), "state.json");
 function load(): DesktopState {
   try {
@@ -81,7 +93,7 @@ function save(state: DesktopState) {
 }
 function hydrate() {
   const state = load();
-  state.globalSettings = { ...defaultGlobalSettings, ...state.globalSettings, scaffold: { ...defaultGlobalSettings.scaffold, ...state.globalSettings?.scaffold } };
+  state.globalSettings = { ...defaultGlobalSettings, ...state.globalSettings, scaffold: { ...defaultGlobalSettings.scaffold, ...state.globalSettings?.scaffold }, github: { ...defaultGlobalSettings.github, ...state.globalSettings?.github } };
   const
     project =
       state.projects.find((item) => item.id === state.activeProjectId) ??
@@ -107,6 +119,48 @@ function hydrate() {
   }
   return state;
 }
+function githubStatus(): GitHubStatus {
+  try {
+    execFileSync("gh", ["--version"], { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  } catch {
+    return { installed: false, authenticated: false, host: "github.com", scopes: [], error: "GitHub CLI is not installed or is not available on PATH" };
+  }
+  try {
+    const output = execFileSync("gh", ["auth", "status", "--hostname", "github.com"], { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    return { installed: true, ...parseGitHubAuthStatus(output) };
+  } catch {
+    return { installed: true, authenticated: false, host: "github.com", scopes: [], error: "Connect a GitHub account to publish branches and pull requests" };
+  }
+}
+async function loginGitHub(): Promise<GitHubStatus> {
+  if (!githubStatus().installed) throw new Error("Install GitHub CLI before connecting a GitHub account");
+  await new Promise<void>((resolveLogin, rejectLogin) => {
+    const child = spawn("gh", ["auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web", "--clipboard", "--scopes", "workflow"], {
+      windowsHide: true,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    const timeout = setTimeout(() => {
+      child.kill();
+      rejectLogin(new Error("GitHub sign-in timed out. Start it again when you are ready to finish in the browser."));
+    }, 10 * 60_000);
+    child.once("error", () => {
+      clearTimeout(timeout);
+      rejectLogin(new Error("GitHub sign-in could not start. Confirm that GitHub CLI is installed."));
+    });
+    child.once("close", (code) => {
+      clearTimeout(timeout);
+      if (code === 0) resolveLogin();
+      else rejectLogin(new Error("GitHub sign-in did not complete. No credentials were stored by CodePilot."));
+    });
+  });
+  execFileSync("gh", ["auth", "setup-git", "--hostname", "github.com"], { windowsHide: true, stdio: "ignore" });
+  const status = githubStatus();
+  if (!status.authenticated) throw new Error("GitHub CLI did not report a connected account after sign-in");
+  return status;
+}
+function assertGitHubWriteAccess() {
+  assertGitHubPublicationAllowed(Boolean(load().globalSettings?.github?.allowWrites), githubStatus());
+}
 function recoverInterruptedRuns() {
   for (const project of load().projects) {
     const db = join(project.repo, ".codepilot", "codepilot.db");
@@ -129,8 +183,8 @@ function recoverInterruptedRuns() {
     }
   }
 }
-function runDetail(id: string) {
-  const db = join(active().repo, ".codepilot", "codepilot.db");
+function runDetail(project: Project, id: string) {
+  const db = join(project.repo, ".codepilot", "codepilot.db");
   if (!existsSync(db)) throw new Error("Run database not found");
   using database = new DatabaseSync(db, { readOnly: true });
   const run = database.prepare("SELECT * FROM runs WHERE id = ?").get(id) as
@@ -171,26 +225,29 @@ function runDetail(id: string) {
 }
 function registerIPC() {
   ipcMain.handle("state:get", () => hydrate());
-  ipcMain.handle("project:brief-get",()=>projectBrief());
-  ipcMain.handle("project:brief-save",(_event,content:string)=>saveProjectBrief(String(content).slice(0,100000)));
+  ipcMain.handle("project:brief-get",(_event,projectId:string)=>projectBrief(projectById(projectId)));
+  ipcMain.handle("project:brief-save",(_event,projectId:string,content:string)=>saveProjectBrief(projectById(projectId),String(content).slice(0,100000)));
   ipcMain.handle("projects:activity",()=>projectActivity());
-  ipcMain.handle("settings:get", () => ({ ...defaultGlobalSettings, ...load().globalSettings, scaffold: { ...defaultGlobalSettings.scaffold, ...load().globalSettings?.scaffold } }));
+  ipcMain.handle("settings:get", () => ({ ...defaultGlobalSettings, ...load().globalSettings, scaffold: { ...defaultGlobalSettings.scaffold, ...load().globalSettings?.scaffold }, github: { ...defaultGlobalSettings.github, ...load().globalSettings?.github } }));
   ipcMain.handle("settings:save", (_event, settings: GlobalSettings) => {
     const state = load();
-    state.globalSettings = { defaultProvider: settings.defaultProvider === "claude" ? "claude" : "codex", scaffold: { mode: settings.scaffold?.mode === "blank" ? "blank" : "guided", autoDeploy: Boolean(settings.scaffold?.autoDeploy), onboardingPrompt: String(settings.scaffold?.onboardingPrompt || defaultGlobalSettings.scaffold.onboardingPrompt).trim().slice(0, 12000) } };
+    state.globalSettings = { defaultProvider: settings.defaultProvider === "claude" ? "claude" : "codex", scaffold: { mode: settings.scaffold?.mode === "blank" ? "blank" : "guided", autoDeploy: Boolean(settings.scaffold?.autoDeploy), onboardingPrompt: String(settings.scaffold?.onboardingPrompt || defaultGlobalSettings.scaffold.onboardingPrompt).trim().slice(0, 12000) }, github: { allowWrites: Boolean(settings.github?.allowWrites) } };
     save(state); return state.globalSettings;
   });
-  ipcMain.handle("run:detail", (_event, id: string) => runDetail(id));
-  ipcMain.handle("app:status", () => projectAppStatus());
-  ipcMain.handle("app:save-config", (_event, config: AppConfig) => {
-    saveAppConfig(config);
-    return projectAppStatus();
+  ipcMain.handle("github:status", () => githubStatus());
+  ipcMain.handle("github:login", () => loginGitHub());
+  ipcMain.handle("run:detail", (_event, projectId: string, id: string) => runDetail(projectById(projectId), id));
+  ipcMain.handle("app:status", (_event, projectId: string) => projectAppStatus(projectById(projectId)));
+  ipcMain.handle("app:save-config", (_event, projectId: string, config: AppConfig) => {
+    const project = projectById(projectId);
+    saveAppConfig(config, project);
+    return projectAppStatus(project);
   });
-  ipcMain.handle("app:start", () => startProjectApp());
-  ipcMain.handle("app:stop", () => stopProjectApp());
-  ipcMain.handle("app:clear-port", () => clearProjectPort());
-  ipcMain.handle("app:open", async () => {
-    const { config } = projectAppStatus();
+  ipcMain.handle("app:start", (_event, projectId: string) => startProjectApp(projectById(projectId)));
+  ipcMain.handle("app:stop", (_event, projectId: string) => stopProjectApp(projectById(projectId)));
+  ipcMain.handle("app:clear-port", (_event, projectId: string) => clearProjectPort(projectById(projectId)));
+  ipcMain.handle("app:open", async (_event, projectId: string) => {
+    const { config } = projectAppStatus(projectById(projectId));
     if (!/^https?:\/\//i.test(config.url)) throw new Error("Configure an http:// or https:// app URL first");
     await shell.openExternal(config.url);
   });
@@ -212,56 +269,67 @@ function registerIPC() {
   });
   ipcMain.handle(
     "project:add",
-    (_event, input: { name: string; repo?: string }) => {
+    (_event, input: { name: string }) => {
       const state = load(),
         name = input.name.trim();
       if (!name) throw new Error("Project name is required");
-      let repo = input.repo
-        ? resolve(input.repo)
-        : resolve(
-            state.projectsDirectory,
-            name.replace(/[^a-zA-Z0-9._-]+/g, "-"),
-          );
-      if (!input.repo) {
-        const rel = relative(resolve(state.projectsDirectory), repo);
-        if (!rel || rel.startsWith(".."))
-          throw new Error("Invalid generated project path");
-        if (existsSync(repo))
-          throw new Error("Project directory already exists");
-        ensureProjectGit(repo, true);
-        execFileSync("git", [
-          "-C",
-          repo,
-          "-c",
-          "user.name=codePilot",
-          "-c",
-          "user.email=codepilot@local",
-          "commit",
-          "--allow-empty",
-          "-m",
-          "Initialize project",
-        ]);
-      } else execFileSync("git", ["-C", repo, "rev-parse", "--show-toplevel"]);
-      if (input.repo) ensureProjectGit(repo);
-      const existing = state.projects.find(
-        (project) => project.repo.toLowerCase() === repo.toLowerCase(),
-      );
-      const project: Project = existing ?? {
+      const repo = resolve(state.projectsDirectory, name.replace(/[^a-zA-Z0-9._-]+/g, "-"));
+      const rel = relative(resolve(state.projectsDirectory), repo);
+      if (!rel || rel.startsWith("..")) throw new Error("Invalid generated project path");
+      if (existsSync(repo)) throw new Error("Project directory already exists");
+      ensureProjectGit(repo, true);
+      execFileSync("git", ["-C", repo, "-c", "user.name=codePilot", "-c", "user.email=codepilot@local", "commit", "--allow-empty", "-m", "Initialize project"]);
+      const project: Project = {
         id: randomUUID(),
         name,
         repo,
         createdAt: new Date().toISOString(),
       };
-      if (!existing) state.projects.push(project);
+      state.projects.push(project);
       state.activeProjectId = project.id;
       save(state);
       return hydrate();
     },
   );
+  ipcMain.handle("project:onboard", async (_event, input: ProjectOnboardingInput) => {
+    const state = load();
+    const repo = input.source === "local"
+      ? canonicalGitRepository(input.repo)
+      : await cloneGitRepository({
+          url: input.url,
+          projectsDirectory: state.projectsDirectory,
+          ...(input.directoryName?.trim() ? { directoryName: input.directoryName } : {}),
+        });
+    ensureProjectGit(repo);
+    const existing = state.projects.find((project) => samePath(project.repo, repo));
+    const fallbackName = input.source === "local" ? suggestedProjectName(repo) : repositoryNameFromRemote(input.url);
+    const name = input.name?.trim() || fallbackName;
+    const project: Project = existing ?? { id: randomUUID(), name, repo, createdAt: new Date().toISOString() };
+    if (!existing) state.projects.push(project);
+    state.activeProjectId = project.id;
+    save(state);
+    return hydrate();
+  });
+  ipcMain.handle("project:remove", (_event, projectId: string) => {
+    const state = load();
+    const project = state.projects.find((candidate) => candidate.id === projectId);
+    if (!project) throw new Error("Project not found. Refresh the workspace and try again.");
+    const activity = projectActivity()[project.id] ?? 0;
+    const appProcess = appProcesses.get(project.id);
+    if (activity > 0 || appProcess?.exitCode === null)
+      throw new Error("Stop this project's PM, agents, and app process before removing it.");
+    const next = removeProjectRegistration(state.projects, state.activeProjectId, project.id);
+    state.projects = next.projects;
+    state.activeProjectId = next.activeProjectId;
+    state.runs = [];
+    pmThreads.delete(project.id);
+    appProcessState.delete(project.id);
+    save(state);
+    return hydrate();
+  });
 }
-function activeAgents() {
-  const project = active(),
-    db = join(project.repo, ".codepilot", "codepilot.db");
+function activeAgents(project: Project) {
+  const db = join(project.repo, ".codepilot", "codepilot.db");
   if (!existsSync(db)) return [];
   using database = new DatabaseSync(db, { readOnly: true });
   const tasks = database
@@ -276,6 +344,7 @@ function activeAgents() {
       )
       .all(String(task.id)) as Array<Record<string, unknown>>;
     return {
+      projectId: project.id,
       taskId: String(task.id),
       runId: String(task.run_id),
       provider: String(task.provider),
@@ -292,27 +361,32 @@ function activeAgents() {
   });
 }
 function registerAgentIPC() {
-  ipcMain.handle("agents:active", () => activeAgents());
-  ipcMain.handle("agents:guide", (_event, taskId: string, message: string) => {
-    if (!activeAgents().some((agent) => agent.taskId === taskId))
+  ipcMain.handle("agents:active", (_event, projectId: string) => activeAgents(projectById(projectId)));
+  ipcMain.handle("agents:guide", (_event, projectId: string, taskId: string, message: string) => {
+    const project = projectById(projectId);
+    if (!activeAgents(project).some((agent) => agent.taskId === taskId))
       throw new Error("That agent is no longer active");
     queueAgentGuidance(taskId, message.slice(0, 4000));
-    return activeAgents();
+    return activeAgents(project);
   });
-  ipcMain.handle("agents:interrupt", (_event, taskId: string) => {
+  ipcMain.handle("agents:interrupt", (_event, projectId: string, taskId: string) => {
+    const project = projectById(projectId);
+    if (!activeAgents(project).some((agent) => agent.taskId === taskId))
+      throw new Error("That agent is no longer active");
     if (!interruptAgent(taskId)) throw new Error("That agent is no longer interruptible");
     return {
       feedback: "Interrupt received. I’m stopping safely now; completed changes and the available handoff evidence will be preserved in session history.",
-      agents: activeAgents(),
+      agents: activeAgents(project),
     };
   });
-  ipcMain.handle("project:open-directory", async () => {
-    const error = await shell.openPath(active().repo);
+  ipcMain.handle("project:open-directory", async (_event, projectId: string) => {
+    const error = await shell.openPath(projectById(projectId).repo);
     if (error) throw new Error(error);
   });
   ipcMain.handle("agents:run", async (_event, input: AgentRunInput) => {
-    const project = active();
-    if (!project || typeof project.repo !== "string" || !project.repo.trim()) throw new Error("The active project has no repository path. Re-select the project or add it again before deploying an agent.");
+    const project = projectById(input.projectId);
+    if (input.createPullRequest) assertGitHubWriteAccess();
+    if (typeof project.repo !== "string" || !project.repo.trim()) throw new Error("The selected project has no repository path. Re-select the project or add it again before deploying an agent.");
     const
       objective = input.objective.trim(),
       providers = input.providers.filter(
@@ -337,6 +411,7 @@ function registerAgentIPC() {
       retries,
       timeoutMs: timeoutMinutes * 60_000,
       integrate: Boolean(input.integrate),
+      createPullRequest: Boolean(input.createPullRequest),
       ...(validationCommands.length ? { validationCommands } : {}),
     });
     return {
@@ -345,12 +420,14 @@ function registerAgentIPC() {
       ...(summary.integrationBranch
         ? { integrationBranch: summary.integrationBranch }
         : {}),
+      ...(summary.pullRequestUrl ? { pullRequestUrl: summary.pullRequestUrl } : {}),
       review: summary.review,
     };
   });
   ipcMain.handle("agents:run-batch", async (_event, input: AgentBatchRunInput) => {
-    const project = active();
-    if (!project?.repo?.trim()) throw new Error("The active project has no repository path.");
+    const project = projectById(input.projectId);
+    if (input.createPullRequest) assertGitHubWriteAccess();
+    if (!project.repo?.trim()) throw new Error("The selected project has no repository path.");
     const items = input.items.slice(0, 20).map((item) => ({
       id: item.id.trim(),
       objective: item.objective.trim(),
@@ -374,29 +451,33 @@ function registerAgentIPC() {
       retries,
       timeoutMs: timeoutMinutes * 60_000,
       integrate: Boolean(input.integrate),
+      createPullRequest: Boolean(input.createPullRequest),
       ...(validationCommands.length ? { validationCommands } : {}),
     });
     return {
       runId: summary.runId,
       status: summary.status,
       ...(summary.integrationBranch ? { integrationBranch: summary.integrationBranch } : {}),
+      ...(summary.pullRequestUrl ? { pullRequestUrl: summary.pullRequestUrl } : {}),
       review: summary.review,
     };
   });
 }
-function active() {
-  const state = load();
-  return (
-    state.projects.find((project) => project.id === state.activeProjectId) ??
-    state.projects[0]!
-  );
+function projectById(projectId: string): Project {
+  const project = load().projects.find((candidate) => candidate.id === projectId);
+  if (!project) throw new Error("Project not found. Refresh the workspace and try again.");
+  return project;
 }
-function projectBrief(project = active()) { const path=join(project.repo,"PROJECT.md"); return {path,content:existsSync(path)?readFileSync(path,"utf8"):"",exists:existsSync(path)}; }
-function saveProjectBrief(content:string){const brief=projectBrief();writeFileSync(brief.path,`${content.trim()}\n`);return projectBrief()}
-function projectActivity(){return Object.fromEntries(load().projects.map(project=>{const path=join(project.repo,".codepilot","codepilot.db");if(!existsSync(path))return[project.id,0];try{using database=new DatabaseSync(path,{readOnly:true});const row=database.prepare("SELECT COUNT(*) AS count FROM tasks WHERE status IN ('leased','running','validating')").get() as Record<string,unknown>;return[project.id,Number(row.count)]}catch{return[project.id,0]}}))}
+function samePath(left: string, right: string): boolean {
+  const normalize = (value: string) => resolve(value).replace(/[\\/]+$/, "").toLowerCase();
+  return normalize(left) === normalize(right);
+}
+function projectBrief(project: Project) { const path=join(project.repo,"PROJECT.md"); return {path,content:existsSync(path)?readFileSync(path,"utf8"):"",exists:existsSync(path)}; }
+function saveProjectBrief(project: Project,content:string){const brief=projectBrief(project);writeFileSync(brief.path,`${content.trim()}\n`);return projectBrief(project)}
+function projectActivity(){return Object.fromEntries(load().projects.map(project=>{const path=join(project.repo,".codepilot","codepilot.db"),pm=pmActivity.get(project.id)??0;if(!existsSync(path))return[project.id,pm];try{using database=new DatabaseSync(path,{readOnly:true});const row=database.prepare("SELECT COUNT(*) AS count FROM tasks WHERE status IN ('leased','running','validating')").get() as Record<string,unknown>;return[project.id,Number(row.count)+pm]}catch{return[project.id,pm]}}))}
 const defaultAppConfig: AppConfig = { command: "", workingDirectory: ".", url: "http://localhost:3000" };
-function appConfigPath(project = active()) { return join(project.repo, ".codepilot", "app-config.json"); }
-function readAppConfig(project = active()): AppConfig {
+function appConfigPath(project: Project) { return join(project.repo, ".codepilot", "app-config.json"); }
+function readAppConfig(project: Project): AppConfig {
   try { return { ...defaultAppConfig, ...(JSON.parse(readFileSync(appConfigPath(project), "utf8")) as Partial<AppConfig>) }; }
   catch {
     try {
@@ -406,7 +487,7 @@ function readAppConfig(project = active()): AppConfig {
     return { ...defaultAppConfig };
   }
 }
-function saveAppConfig(input: AppConfig, project = active()) {
+function saveAppConfig(input: AppConfig, project: Project) {
   const command = String(input.command ?? "").trim().slice(0, 1000);
   const workingDirectory = String(input.workingDirectory ?? ".").trim() || ".";
   const cwd = resolve(project.repo, workingDirectory);
@@ -417,7 +498,7 @@ function saveAppConfig(input: AppConfig, project = active()) {
   mkdirSync(dirname(appConfigPath(project)), { recursive: true });
   writeFileSync(appConfigPath(project), JSON.stringify({ command, workingDirectory, url }, null, 2));
 }
-function projectAppStatus(project = active()) {
+function projectAppStatus(project: Project) {
   const process = appProcesses.get(project.id), state = appProcessState.get(project.id) ?? { logs: [] };
   return { configured: Boolean(readAppConfig(project).command), running: Boolean(process && process.exitCode === null), ...(process?.pid ? { pid: process.pid } : {}), ...(state.startedAt ? { startedAt: state.startedAt } : {}), config: readAppConfig(project), logs: state.logs };
 }
@@ -439,8 +520,8 @@ function projectEnvironment(...directories: string[]): NodeJS.ProcessEnv {
   }
   return values;
 }
-function startProjectApp() {
-  const project = active(), current = appProcesses.get(project.id);
+function startProjectApp(project: Project) {
+  const current = appProcesses.get(project.id);
   if (current?.exitCode === null) return projectAppStatus(project);
   const config = readAppConfig(project);
   if (!config.command) throw new Error("Configure a start command first");
@@ -456,8 +537,8 @@ function startProjectApp() {
   appProcesses.set(project.id, child); appProcessState.set(project.id, state);
   return projectAppStatus(project);
 }
-function stopProjectApp() {
-  const project = active(), child = appProcesses.get(project.id);
+function stopProjectApp(project: Project) {
+  const child = appProcesses.get(project.id);
   if (child?.pid) {
     if (process.platform === "win32") { try { execFileSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }); } catch { child.kill(); } }
     else child.kill("SIGTERM");
@@ -466,9 +547,8 @@ function stopProjectApp() {
   }
   return projectAppStatus(project);
 }
-function clearProjectPort() {
-  const project = active();
-  stopProjectApp();
+function clearProjectPort(project: Project) {
+  stopProjectApp(project);
   const config = readAppConfig(project);
   let parsed: URL;
   try { parsed = new URL(config.url); } catch { throw new Error("Configure a valid http:// or https:// app URL before clearing its port."); }
@@ -490,10 +570,10 @@ function clearProjectPort() {
   }
   return projectAppStatus(project);
 }
-function knowledgeDir() {
-  return join(active().repo, ".codepilot", "knowledge");
+function knowledgeDir(project: Project) {
+  return join(project.repo, ".codepilot", "knowledge");
 }
-function entries(directory = knowledgeDir()): KnowledgeEntry[] {
+function entries(directory: string): KnowledgeEntry[] {
   if (!existsSync(directory)) return [];
   return readdirSync(directory)
     .filter((name) => name.endsWith(".json"))
@@ -510,11 +590,11 @@ function entries(directory = knowledgeDir()): KnowledgeEntry[] {
     })
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
-function history(): ChatMessage[] {
+function history(project: Project): ChatMessage[] {
   try {
     return JSON.parse(
       readFileSync(
-        join(active().repo, ".codepilot", "knowledge-chat.json"),
+        join(project.repo, ".codepilot", "knowledge-chat.json"),
         "utf8",
       ),
     ) as ChatMessage[];
@@ -522,18 +602,18 @@ function history(): ChatMessage[] {
     return [];
   }
 }
-function knowledgeState(): KnowledgeState {
-  return { entries: entries(), messages: history() };
+function knowledgeState(project: Project): KnowledgeState {
+  return { entries: entries(knowledgeDir(project)), messages: history(project) };
 }
-function saveEntry(entry: KnowledgeEntry) {
-  mkdirSync(knowledgeDir(), { recursive: true });
+function saveEntry(project: Project, entry: KnowledgeEntry) {
+  mkdirSync(knowledgeDir(project), { recursive: true });
   writeFileSync(
-    join(knowledgeDir(), `${entry.id}.json`),
+    join(knowledgeDir(project), `${entry.id}.json`),
     JSON.stringify(entry, null, 2),
   );
 }
-function saveChat(messages: ChatMessage[]) {
-  const path = join(active().repo, ".codepilot", "knowledge-chat.json");
+function saveChat(project: Project, messages: ChatMessage[]) {
+  const path = join(project.repo, ".codepilot", "knowledge-chat.json");
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(messages.slice(-100), null, 2));
 }
@@ -560,7 +640,7 @@ function matchesPMTask(objective: string, title: string, taskId?: string): boole
   const overlap = [...taskWords].filter((word) => runWords.has(word)).length;
   return overlap / Math.min(taskWords.size, runWords.size) >= 0.8;
 }
-function pmState(repo = active().repo): PMState {
+function pmState(repo: string): PMState {
   const paths = pmPaths(repo);
   const storedTasks = loadPMTasks(repo) as PMTask[];
   const committedTaskIds = new Set(
@@ -642,8 +722,8 @@ function pmState(repo = active().repo): PMState {
     messages: readJson<ChatMessage[]>(paths.chat, []),
   };
 }
-function pmTaskDetail(id: string) {
-  const project = active(), state = pmState(project.repo), task = state.tasks.find((item) => item.id === id);
+function pmTaskDetail(project: Project, id: string) {
+  const state = pmState(project.repo), task = state.tasks.find((item) => item.id === id);
   if (!task) throw new Error("Task not found");
   const prerequisites = task.dependencies.map((dependency) => {
     const prerequisite = state.tasks.find((item) => item.id === dependency)!;
@@ -674,18 +754,20 @@ function ensureProjectGit(repo: string, initialize = false) {
     mkdirSync(root, { recursive: true });
     execFileSync("git", ["init", root]);
   } else {
-    const gitRoot = resolve(execFileSync("git", ["-C", root, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim());
-    if (gitRoot.toLowerCase() !== root.toLowerCase()) throw new Error("Each codePilot project must be its own Git repository, not a subdirectory of another repository.");
+    const gitRoot = canonicalGitRepository(root);
+    if (!samePath(gitRoot, root)) throw new Error("Each codePilot project must be its own Git repository, not a subdirectory of another repository.");
   }
-  const ignorePath = join(root, ".gitignore");
+  const ignorePath = initialize
+    ? join(root, ".gitignore")
+    : resolve(root, execFileSync("git", ["-C", root, "rev-parse", "--git-path", "info/exclude"], { encoding: "utf8", windowsHide: true }).trim());
   const existing = existsSync(ignorePath) ? readFileSync(ignorePath, "utf8") : "";
   if (!/(^|\r?\n)\.codepilot\/?(?:\r?\n|$)/m.test(existing)) {
+    mkdirSync(dirname(ignorePath), { recursive: true });
     writeFileSync(ignorePath, `${existing.trimEnd()}${existing.trim() ? "\n\n" : ""}.codepilot/\n`);
     if (initialize) execFileSync("git", ["-C", root, "add", ".gitignore"]);
   }
 }
-function commitPMTaskBin(taskIds: string[]): TaskBin {
-  const project = active();
+function commitPMTaskBin(project: Project, taskIds: string[]): TaskBin {
   const state = pmState(project.repo);
   const selected = [...new Set(taskIds)].map((id) => state.tasks.find((task) => task.id === id)).filter((task): task is PMTask => Boolean(task));
   if (!selected.length) throw new Error("Select at least one task to create a commit bin.");
@@ -702,18 +784,18 @@ function commitPMTaskBin(taskIds: string[]): TaskBin {
   saveCommittedTaskBin(project.repo, bin, state.tasks);
   return bin;
 }
-function createPMTask(input: NewPMTask): PMState {
+function createPMTask(project: Project, input: NewPMTask): PMState {
   const title = input.title.trim(), description = input.description.trim();
   if (!title || !description) throw new Error("Task title and description are required.");
-  const project = active(), state = pmState(project.repo), now = new Date().toISOString();
+  const state = pmState(project.repo), now = new Date().toISOString();
   const task: PMTask = { id: randomUUID(), title, description, acceptanceCriteria: (input.acceptanceCriteria ?? []).map((item) => item.trim()).filter(Boolean), priority: input.priority === "high" || input.priority === "low" ? input.priority : "medium", status: "ready", queueId: "deploy", queueTitle: "Deploy queue", dependencies: [], recommendedProvider: input.recommendedProvider === "claude" ? "claude" : "codex", createdAt: now, updatedAt: now };
   state.tasks.push(task);
   state.tasks = reconcileTaskStatuses(state.tasks);
   savePM(project.repo, state);
   return pmState(project.repo);
 }
-function deletePMTask(id: string): PMState {
-  const project = active(), state = pmState(project.repo);
+function deletePMTask(project: Project, id: string): PMState {
+  const state = pmState(project.repo);
   if (!state.tasks.some((task) => task.id === id)) throw new Error("Task not found");
   state.tasks = omitTaskDependencies(state.tasks.filter((task) => task.id !== id), new Set([id]));
   state.tasks = reconcileTaskStatuses(state.tasks);
@@ -744,11 +826,10 @@ const schema = {
   required: ["message", "operations"],
   additionalProperties: false,
 };
-async function chat(message: string) {
+async function chat(project: Project, message: string) {
   if (!message.trim()) throw new Error("Message required");
-  const project = active(),
-    before = entries(),
-    messages = history(),
+  const before = entries(knowledgeDir(project)),
+    messages = history(project),
     temp = join(app.getPath("temp"), `codepilot-chat-${randomUUID()}`);
   mkdirSync(temp, { recursive: true });
   const schemaPath = join(temp, "schema.json"),
@@ -787,7 +868,7 @@ async function chat(message: string) {
       operation.content.trim()
     ) {
       const now = new Date().toISOString();
-      saveEntry({
+      saveEntry(project, {
         id: randomUUID(),
         title: operation.title.trim(),
         content: operation.content.trim(),
@@ -800,7 +881,7 @@ async function chat(message: string) {
     } else if (operation.action === "update") {
       const old = before.find((item) => item.id === operation.id);
       if (old && operation.title.trim() && operation.content.trim()) {
-        saveEntry({
+        saveEntry(project, {
           ...old,
           title: operation.title.trim(),
           content: operation.content.trim(),
@@ -814,12 +895,12 @@ async function chat(message: string) {
       operation.action === "delete" &&
       before.some((item) => item.id === operation.id)
     ) {
-      rmSync(join(knowledgeDir(), `${operation.id}.json`), { force: true });
+      rmSync(join(knowledgeDir(project), `${operation.id}.json`), { force: true });
       applied++;
     }
   }
   const now = new Date().toISOString();
-  saveChat([
+  saveChat(project, [
     ...messages,
     { role: "user", content: message, timestamp: now },
     {
@@ -830,7 +911,7 @@ async function chat(message: string) {
     },
   ]);
   rmSync(temp, { recursive: true, force: true });
-  return knowledgeState();
+  return knowledgeState(project);
 }
 function run(command: string, args: string[], input = ""): Promise<void> {
   return new Promise((done, fail) => {
@@ -855,9 +936,9 @@ function run(command: string, args: string[], input = ""): Promise<void> {
   });
 }
 function registerKnowledgeIPC() {
-  ipcMain.handle("knowledge:get", () => knowledgeState());
-  ipcMain.handle("knowledge:chat", (_event, message: string) =>
-    chat(message.slice(0, 8000)),
+  ipcMain.handle("knowledge:get", (_event, projectId: string) => knowledgeState(projectById(projectId)));
+  ipcMain.handle("knowledge:chat", (_event, projectId: string, message: string) =>
+    chat(projectById(projectId), message.slice(0, 8000)),
   );
 }
 const pmSchema = {
@@ -956,7 +1037,7 @@ async function persistentPMReply(project: Project, prompt: string): Promise<stri
   pmThreads.set(project.id, threadId);
   return await pmServer.turn(threadId, project.repo, prompt, pmSchema);
 }
-async function chatPM(message: string, targetProject = active()) {
+async function chatPM(message: string, targetProject: Project) {
   if (!message.trim()) throw new Error("Message required");
   const project = targetProject,
     before = pmState(project.repo),
@@ -1109,17 +1190,25 @@ async function chatPM(message: string, targetProject = active()) {
   }
 }
 function registerPMIPC() {
-  ipcMain.handle("pm:get", () => pmState());
-  ipcMain.handle("pm:task-detail", (_event, id: string) => pmTaskDetail(id));
-  ipcMain.handle("pm:chat", async (_event, message: string) => {
-    const state = await chatPM(message.slice(0, 8000));
-    if (state.requiresUserInput)
-      for (const browserWindow of BrowserWindow.getAllWindows())
-        browserWindow.webContents.send("pm:user-input-required");
-    return state;
+  ipcMain.handle("pm:get", (_event, projectId: string) => pmState(projectById(projectId).repo));
+  ipcMain.handle("pm:task-detail", (_event, projectId: string, id: string) => pmTaskDetail(projectById(projectId), id));
+  ipcMain.handle("pm:chat", async (_event, projectId: string, message: string) => {
+    const project = projectById(projectId);
+    pmActivity.set(project.id, (pmActivity.get(project.id) ?? 0) + 1);
+    try {
+      const state = await pmTurns.run(project.id, () => chatPM(message.slice(0, 8000), project));
+      if (state.requiresUserInput)
+        for (const browserWindow of BrowserWindow.getAllWindows())
+          browserWindow.webContents.send("pm:user-input-required", project.id);
+      return state;
+    } finally {
+      const remaining = (pmActivity.get(project.id) ?? 1) - 1;
+      if (remaining > 0) pmActivity.set(project.id, remaining);
+      else pmActivity.delete(project.id);
+    }
   });
-  ipcMain.handle("pm:clear-chat", () => {
-    const project = active(),
+  ipcMain.handle("pm:clear-chat", (_event, projectId: string) => {
+    const project = projectById(projectId),
       state = pmState(project.repo),
       next = { ...state, messages: [] };
     pmThreads.delete(project.id);
@@ -1129,10 +1218,10 @@ function registerPMIPC() {
   });
   ipcMain.handle(
     "pm:task-status",
-      (_event, id: string, status: PMTask["status"], summary?: string) => {
+      (_event, projectId: string, id: string, status: PMTask["status"], summary?: string) => {
       if (!["backlog", "blocked", "ready", "launched", "done", "committed"].includes(status))
         throw new Error("Invalid task status");
-      const project = active(),
+      const project = projectById(projectId),
         state = pmState(project.repo),
         task = state.tasks.find((item) => item.id === id);
       if (!task) throw new Error("Task not found");
@@ -1147,8 +1236,8 @@ function registerPMIPC() {
       return pmState(project.repo);
     },
   );
-  ipcMain.handle("pm:task-failure", (_event, id: string, summary: string) => {
-    const project = active(),
+  ipcMain.handle("pm:task-failure", (_event, projectId: string, id: string, summary: string) => {
+    const project = projectById(projectId),
       state = pmState(project.repo),
       task = state.tasks.find((item) => item.id === id);
     if (!task) throw new Error("Task not found");
@@ -1165,9 +1254,9 @@ function registerPMIPC() {
     savePM(project.repo, state);
     return pmState(project.repo);
   });
-  ipcMain.handle("pm:commit-bin", (_event, taskIds: string[]) => commitPMTaskBin(taskIds));
-  ipcMain.handle("pm:create-task", (_event, input: NewPMTask) => createPMTask(input));
-  ipcMain.handle("pm:delete-task", (_event, id: string) => deletePMTask(id));
+  ipcMain.handle("pm:commit-bin", (_event, projectId: string, taskIds: string[]) => commitPMTaskBin(projectById(projectId), taskIds));
+  ipcMain.handle("pm:create-task", (_event, projectId: string, input: NewPMTask) => createPMTask(projectById(projectId), input));
+  ipcMain.handle("pm:delete-task", (_event, projectId: string, id: string) => deletePMTask(projectById(projectId), id));
 }
 function createWindow() {
   window = new BrowserWindow({

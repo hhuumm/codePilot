@@ -22,6 +22,7 @@ test("detects changed-path collisions", () => {
   const makeResult = (taskId: string, changedPaths: string[]): WorkerResult => ({
     version: 0,
     taskId,
+    provider: "codex",
     verification: {
       processExitCode: 0,
       baseCommit: "base",

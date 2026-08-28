@@ -1,15 +1,15 @@
 import { PaperAirplaneIcon, SparklesIcon } from "@heroicons/react/20/solid";
 import { useEffect, useRef, useState } from "react";
 import type { KnowledgeState } from "./types";
-export function Knowledge() {
+export function Knowledge({ projectId }: { projectId: string }) {
   const [state, setState] = useState<KnowledgeState>(),
     [input, setInput] = useState(""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const chat = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    void window.codepilot.getKnowledge().then(setState);
-  }, []);
+    void window.codepilot.getKnowledge(projectId).then(setState);
+  }, [projectId]);
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
       if (chat.current) chat.current.scrollTop = chat.current.scrollHeight;
@@ -23,7 +23,7 @@ export function Knowledge() {
     setError("");
     setInput("");
     try {
-      setState(await window.codepilot.chatKnowledge(message));
+      setState(await window.codepilot.chatKnowledge(projectId, message));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {

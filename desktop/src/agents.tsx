@@ -1,22 +1,24 @@
 import React, { useEffect, useState } from "react";
 import { PlayIcon } from "@heroicons/react/24/outline";
 import type { AgentRunResult, DesktopState, PMState, PMTask } from "./types";
-export function Agents({ onState }: { onState(state: DesktopState): void }) {
+export function Agents({ projectId, onState }: { projectId: string; onState(state: DesktopState): void }) {
   const [objective, setObjective] = useState(""),
     [codex, setCodex] = useState(true),
     [claude, setClaude] = useState(false),
     [validation, setValidation] = useState(""),
     [integrate, setIntegrate] = useState(true),
+    [createPullRequest, setCreatePullRequest] = useState(false),
     [dryRun, setDryRun] = useState(false),
     [running, setRunning] = useState(0),
     [error, setError] = useState(""),
     [results, setResults] = useState<AgentRunResult[]>([]);
   const [pmState, setPMState] = useState<PMState>();
+  const [githubReady, setGitHubReady] = useState(false);
   const [showAllTasks, setShowAllTasks] = useState(false);
   const [poofing, setPoofing] = useState<Set<string>>(() => new Set());
-  useEffect(() => { void window.codepilot.getGlobalSettings().then((settings) => { setCodex(settings.defaultProvider === "codex"); setClaude(settings.defaultProvider === "claude"); }); }, []);
-  useEffect(() => { let active = true; const refresh = () => void window.codepilot.getPM().then((next) => active && setPMState(next)); refresh(); const timer = window.setInterval(refresh, 2000); return () => { active = false; window.clearInterval(timer); }; }, []);
-  async function deployTask(task: PMTask) { setError(""); try { setPMState(await window.codepilot.setPMTaskStatus(task.id, "launched")); setPoofing((items) => new Set(items).add(task.id)); await new Promise((resolve) => window.setTimeout(resolve, 900)); const result = await window.codepilot.runAgents({ objective: `${task.title}\n\ncodePilot PM task: ${task.id}\n\n${task.description}\n\nAcceptance criteria:\n${task.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`, providers: [task.recommendedProvider === "claude" ? "claude" : "codex"], retries: 0, timeoutMinutes: 30, validationCommands: [], integrate: true, dryRun: false }); setResults((current) => [result, ...current].slice(0, 5)); const nextStatus = result.status === "completed" ? "done" : "ready"; const summary = result.review.findings.length ? result.review.findings.join(" ") : `Task did not advance because the agent run returned ${result.status} with review verdict ${result.review.verdict}.`; setPMState(await window.codepilot.setPMTaskStatus(task.id, nextStatus, summary)); } catch (cause) { const reason = cause instanceof Error ? cause.message : String(cause); setError(reason); try { setPMState(await window.codepilot.setPMTaskStatus(task.id, "ready", `Task did not advance because deployment failed: ${reason}`)); } catch {} } finally { setPoofing((items) => { const next = new Set(items); next.delete(task.id); return next; }); } }
+  useEffect(() => { void Promise.all([window.codepilot.getGlobalSettings(), window.codepilot.getGitHubStatus()]).then(([settings, status]) => { setCodex(settings.defaultProvider === "codex"); setClaude(settings.defaultProvider === "claude"); setGitHubReady(status.authenticated && settings.github.allowWrites); }); }, []);
+  useEffect(() => { let active = true; const refresh = () => void window.codepilot.getPM(projectId).then((next) => active && setPMState(next)); refresh(); const timer = window.setInterval(refresh, 2000); return () => { active = false; window.clearInterval(timer); }; }, [projectId]);
+  async function deployTask(task: PMTask) { setError(""); try { setPMState(await window.codepilot.setPMTaskStatus(projectId, task.id, "launched")); setPoofing((items) => new Set(items).add(task.id)); await new Promise((resolve) => window.setTimeout(resolve, 900)); const result = await window.codepilot.runAgents({ projectId, objective: `${task.title}\n\ncodePilot PM task: ${task.id}\n\n${task.description}\n\nAcceptance criteria:\n${task.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`, providers: [task.recommendedProvider === "claude" ? "claude" : "codex"], retries: 0, timeoutMinutes: 30, validationCommands: [], integrate, createPullRequest, dryRun }); setResults((current) => [result, ...current].slice(0, 5)); const nextStatus = result.status === "completed" ? "done" : "ready"; const summary = result.review.findings.length ? result.review.findings.join(" ") : `Task did not advance because the agent run returned ${result.status} with review verdict ${result.review.verdict}.`; setPMState(await window.codepilot.setPMTaskStatus(projectId, task.id, nextStatus, summary)); } catch (cause) { const reason = cause instanceof Error ? cause.message : String(cause); setError(reason); try { setPMState(await window.codepilot.setPMTaskStatus(projectId, task.id, "ready", `Task did not advance because deployment failed: ${reason}`)); } catch {} } finally { setPoofing((items) => { const next = new Set(items); next.delete(task.id); return next; }); } }
   async function launch() {
     const requestObjective = objective.trim();
     if (!requestObjective) return;
@@ -25,7 +27,7 @@ export function Agents({ onState }: { onState(state: DesktopState): void }) {
     setValidation("");
     try {
       const [title, ...rest] = requestObjective.split(/\r?\n/);
-      const nextPM = await window.codepilot.createPMTask({ title: title.slice(0, 160), description: `${rest.join("\n").trim() || title}${validation.trim() ? `\n\nVerification criteria:\n${validation.trim()}` : ""}`, acceptanceCriteria: validation.split("\n").map((item) => item.trim()).filter(Boolean), recommendedProvider: codex ? "codex" : "claude" });
+      const nextPM = await window.codepilot.createPMTask(projectId, { title: title.slice(0, 160), description: `${rest.join("\n").trim() || title}${validation.trim() ? `\n\nVerification criteria:\n${validation.trim()}` : ""}`, acceptanceCriteria: validation.split("\n").map((item) => item.trim()).filter(Boolean), recommendedProvider: codex ? "codex" : "claude" });
       setPMState(nextPM);
       const created = [...nextPM.tasks].reverse().find((task) => task.title === title.slice(0, 160));
       if (created) void deployTask(created);
@@ -101,6 +103,7 @@ export function Agents({ onState }: { onState(state: DesktopState): void }) {
                   • {item}
                 </div>
               ))}
+              {result.pullRequestUrl && <a href={result.pullRequestUrl} target="_blank" rel="noreferrer" className="mt-3 block text-xs font-semibold text-indigo-300 hover:text-indigo-200">Open pull request →</a>}
             </div>
           ))}
         </section>
@@ -114,6 +117,12 @@ export function Agents({ onState }: { onState(state: DesktopState): void }) {
               label="Create integration branch"
               checked={integrate}
               set={setIntegrate}
+            />
+            <Check
+              label={githubReady ? "Create GitHub pull request" : "Connect GitHub in Settings to publish"}
+              checked={createPullRequest}
+              disabled={!githubReady}
+              set={(value) => { setCreatePullRequest(value); if (value) { setIntegrate(true); setDryRun(false); } }}
             />
             <Check label="Dry run only" checked={dryRun} set={setDryRun} />
             <p className="mt-3 text-xs leading-5 text-zinc-600">
@@ -147,16 +156,19 @@ function Check({
   label,
   checked,
   set,
+  disabled = false,
 }: {
   label: string;
   checked: boolean;
   set(value: boolean): void;
+  disabled?: boolean;
 }) {
   return (
-    <label className="mb-3 flex cursor-pointer items-center justify-between text-sm text-zinc-300">
+    <label className={`mb-3 flex items-center justify-between text-sm text-zinc-300 ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}>
       <span>{label}</span>
       <input
         type="checkbox"
+        disabled={disabled}
         checked={checked}
         onChange={(e) => set(e.target.checked)}
         className="size-4 accent-indigo-500"

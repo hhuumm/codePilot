@@ -1,17 +1,93 @@
-import { useState } from "react";
-import { CheckIcon, CpuChipIcon, SparklesIcon } from "@heroicons/react/24/outline";
-import type { DesktopState, GlobalSettings } from "./types";
+import { useEffect, useState } from "react";
+import { CheckIcon, CloudIcon, CpuChipIcon, SparklesIcon } from "@heroicons/react/24/outline";
+import type { DesktopState, GitHubStatus, GlobalSettings } from "./types";
 
 export function Settings({ state, onState }: { state: DesktopState; onState(state: DesktopState): void }) {
-  const [settings,setSettings]=useState<GlobalSettings>(state.globalSettings),[saved,setSaved]=useState(false),[busy,setBusy]=useState(false);
-  async function save(){setBusy(true);try{const next=await window.codepilot.saveGlobalSettings(settings);setSettings(next);onState(await window.codepilot.getState());setSaved(true);window.setTimeout(()=>setSaved(false),1800)}finally{setBusy(false)}}
-  return <div className="mx-auto max-w-4xl"><div className="text-xs font-semibold uppercase tracking-[.2em] text-violet-400">Global configuration</div><h1 className="mt-2 text-2xl font-semibold">Settings</h1><p className="mt-2 text-sm text-zinc-400">Defaults apply across projects and sessions.</p>
-    <section className="mt-8 rounded-2xl border border-violet-400/15 bg-violet-400/[.035] p-6"><Header icon={<CpuChipIcon className="size-5"/>} title="Default model provider" text="Used by guided scaffolding, automatic tasks, and as the initial choice in Deploy."/><div className="mt-6 grid grid-cols-2 gap-4">{(["codex","claude"] as const).map(provider=><Choice key={provider} active={settings.defaultProvider===provider} on={()=>setSettings({...settings,defaultProvider:provider})} title={provider} text={provider==="codex"?"OpenAI coding agent":"Anthropic Claude Code"}/>)}</div></section>
-    <section className="mt-6 rounded-2xl border border-violet-400/15 bg-violet-400/[.035] p-6"><Header icon={<SparklesIcon className="size-5"/>} title="Project scaffolding" text="Choose whether new projects open as blank repositories or begin a guided Project Manager onboarding."/><div className="mt-6 grid grid-cols-2 gap-4"><Choice active={settings.scaffold.mode==="guided"} on={()=>setSettings({...settings,scaffold:{...settings.scaffold,mode:"guided"}})} title="Guided onboarding" text="Start a requirements conversation and build through agreed tasks."/><Choice active={settings.scaffold.mode==="blank"} on={()=>setSettings({...settings,scaffold:{...settings.scaffold,mode:"blank"}})} title="Blank repository" text="Create Git foundations without starting a conversation."/></div>
-      <label className="mt-6 block text-sm font-medium text-zinc-300">Onboarding instructions<span className="mt-1 block text-xs font-normal text-zinc-600">Injected as the opening Project Manager message for every guided project.</span><textarea rows={9} value={settings.scaffold.onboardingPrompt} onChange={event=>setSettings({...settings,scaffold:{...settings.scaffold,onboardingPrompt:event.target.value}})} disabled={settings.scaffold.mode==="blank"} className="mt-3 w-full resize-y rounded-xl border border-white/10 bg-black/25 p-4 text-sm leading-6 text-zinc-300 outline-none focus:border-violet-400/40 disabled:opacity-40"/></label>
-      <label className="mt-5 flex cursor-pointer items-center justify-between rounded-xl border border-white/10 bg-black/20 p-4"><div><div className="text-sm font-medium">Auto-deploy agreed tasks</div><div className="mt-1 text-xs text-zinc-600">Use the global model as requirements become implementation-ready.</div></div><input type="checkbox" checked={settings.scaffold.autoDeploy} onChange={event=>setSettings({...settings,scaffold:{...settings.scaffold,autoDeploy:event.target.checked}})} className="size-4 accent-violet-500"/></label>
-    </section><div className="mt-6 flex items-center justify-end gap-4">{saved&&<span className="text-xs text-emerald-400">Global settings saved.</span>}<button disabled={busy||!settings.scaffold.onboardingPrompt.trim()} onClick={()=>void save()} className="rounded-xl bg-violet-500 px-5 py-2.5 text-sm font-semibold hover:bg-violet-400 disabled:opacity-40">{busy?"Saving…":"Save global settings"}</button></div>
+  const [settings, setSettings] = useState<GlobalSettings>(state.globalSettings);
+  const [github, setGitHub] = useState<GitHubStatus>();
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [githubBusy, setGitHubBusy] = useState(false);
+  const [githubError, setGitHubError] = useState("");
+
+  useEffect(() => {
+    void window.codepilot.getGitHubStatus().then(setGitHub).catch(cause => setGitHubError(cause instanceof Error ? cause.message : String(cause)));
+  }, []);
+
+  async function save() {
+    setBusy(true);
+    try {
+      const next = await window.codepilot.saveGlobalSettings(settings);
+      setSettings(next);
+      onState(await window.codepilot.getState());
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 1800);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function connectGitHub() {
+    setGitHubBusy(true);
+    setGitHubError("");
+    try {
+      const next = await window.codepilot.loginGitHub();
+      setGitHub(next);
+      setSettings(current => ({ ...current, github: { allowWrites: true } }));
+    } catch (cause) {
+      setGitHubError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setGitHubBusy(false);
+    }
+  }
+
+  return <div className="mx-auto max-w-4xl">
+    <div className="text-xs font-semibold uppercase tracking-[.2em] text-violet-400">Global configuration</div>
+    <h1 className="mt-2 text-2xl font-semibold">Settings</h1>
+    <p className="mt-2 text-sm text-zinc-400">Defaults apply across projects and sessions.</p>
+
+    <section className="mt-8 rounded-2xl border border-violet-400/15 bg-violet-400/[.035] p-6">
+      <Header icon={<CloudIcon className="size-5"/>} title="GitHub connection" text="Delegate authentication to GitHub CLI and its system credential store. CodePilot never reads or saves your token."/>
+      <div className="mt-6 rounded-xl border border-white/10 bg-black/20 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <div className={`text-sm font-semibold ${github?.authenticated ? "text-emerald-300" : "text-zinc-300"}`}>
+              {github?.authenticated ? `Connected as @${github.account}` : github?.installed === false ? "GitHub CLI not found" : "GitHub is not connected"}
+            </div>
+            <p className="mt-1 text-xs text-zinc-600">
+              {github?.authenticated ? `${github.gitProtocol?.toUpperCase() || "Git"} · ${github.scopes.length ? github.scopes.join(", ") : "permissions managed by GitHub"}` : "Sign-in opens GitHub's browser flow and copies its one-time code to your clipboard."}
+            </p>
+          </div>
+          <button disabled={githubBusy || github?.installed === false} onClick={() => void connectGitHub()} className="rounded-lg border border-violet-400/30 bg-violet-400/10 px-4 py-2 text-xs font-semibold text-violet-200 hover:bg-violet-400/15 disabled:opacity-40">
+            {githubBusy ? "Waiting for GitHub…" : github?.authenticated ? "Reconnect account" : "Connect GitHub"}
+          </button>
+        </div>
+        {githubError && <p className="mt-3 text-xs text-red-300">{githubError}</p>}
+      </div>
+      <label className={`mt-4 flex items-center justify-between rounded-xl border border-white/10 bg-black/20 p-4 ${github?.authenticated ? "cursor-pointer" : "cursor-not-allowed opacity-50"}`}>
+        <div>
+          <div className="text-sm font-medium">Allow GitHub write operations</div>
+          <div className="mt-1 text-xs text-zinc-600">Permits branch pushes and pull-request creation only when a deploy explicitly selects GitHub publishing.</div>
+        </div>
+        <input type="checkbox" disabled={!github?.authenticated} checked={settings.github.allowWrites} onChange={event => setSettings({...settings, github: { allowWrites: event.target.checked }})} className="size-4 accent-violet-500"/>
+      </label>
+    </section>
+
+    <section className="mt-6 rounded-2xl border border-violet-400/15 bg-violet-400/[.035] p-6">
+      <Header icon={<CpuChipIcon className="size-5"/>} title="Default model provider" text="Used by guided scaffolding, automatic tasks, and as the initial choice in Deploy."/>
+      <div className="mt-6 grid grid-cols-2 gap-4">{(["codex","claude"] as const).map(provider => <Choice key={provider} active={settings.defaultProvider === provider} on={() => setSettings({...settings, defaultProvider: provider})} title={provider} text={provider === "codex" ? "OpenAI coding agent" : "Anthropic Claude Code"}/>)}</div>
+    </section>
+
+    <section className="mt-6 rounded-2xl border border-violet-400/15 bg-violet-400/[.035] p-6">
+      <Header icon={<SparklesIcon className="size-5"/>} title="Project scaffolding" text="Choose whether new projects open as blank repositories or begin a guided Project Manager onboarding."/>
+      <div className="mt-6 grid grid-cols-2 gap-4"><Choice active={settings.scaffold.mode === "guided"} on={() => setSettings({...settings, scaffold: {...settings.scaffold, mode: "guided"}})} title="Guided onboarding" text="Start a requirements conversation and build through agreed tasks."/><Choice active={settings.scaffold.mode === "blank"} on={() => setSettings({...settings, scaffold: {...settings.scaffold, mode: "blank"}})} title="Blank repository" text="Create Git foundations without starting a conversation."/></div>
+      <label className="mt-6 block text-sm font-medium">Onboarding instructions<span className="mt-1 block text-xs font-normal text-zinc-600">Injected as the opening Project Manager message for every guided project.</span><textarea rows={9} value={settings.scaffold.onboardingPrompt} onChange={event => setSettings({...settings, scaffold: {...settings.scaffold, onboardingPrompt: event.target.value}})} disabled={settings.scaffold.mode === "blank"} className="mt-3 w-full resize-y rounded-xl border border-white/10 bg-black/25 p-4 text-sm leading-6 text-zinc-300 outline-none focus:border-violet-400/40 disabled:opacity-40"/></label>
+      <label className="mt-5 flex cursor-pointer items-center justify-between rounded-xl border border-white/10 bg-black/20 p-4"><div><div className="text-sm font-medium">Auto-deploy agreed tasks</div><div className="mt-1 text-xs text-zinc-600">Use the global model as requirements become implementation-ready.</div></div><input type="checkbox" checked={settings.scaffold.autoDeploy} onChange={event => setSettings({...settings, scaffold: {...settings.scaffold, autoDeploy: event.target.checked}})} className="size-4 accent-violet-500"/></label>
+    </section>
+
+    <div className="mt-6 flex items-center justify-end gap-4">{saved && <span className="text-xs text-emerald-400">Global settings saved.</span>}<button disabled={busy || !settings.scaffold.onboardingPrompt.trim()} onClick={() => void save()} className="rounded-xl bg-violet-500 px-5 py-2.5 text-sm font-semibold hover:bg-violet-400 disabled:opacity-40">{busy ? "Saving…" : "Save global settings"}</button></div>
   </div>;
 }
+
 function Header({icon,title,text}:{icon:React.ReactNode;title:string;text:string}){return <div className="flex items-start gap-4"><span className="grid size-10 place-items-center rounded-xl bg-violet-400/10 text-violet-300">{icon}</span><div><h2 className="text-sm font-semibold">{title}</h2><p className="mt-1 text-xs leading-5 text-zinc-500">{text}</p></div></div>}
 function Choice({active,on,title,text}:{active:boolean;on():void;title:string;text:string}){return <button onClick={on} className={`flex items-center justify-between rounded-xl border p-5 text-left transition ${active?"border-violet-400/40 bg-violet-400/10":"border-white/10 bg-black/20 hover:bg-white/5"}`}><div><div className="font-semibold capitalize">{title}</div><div className="mt-1 text-xs text-zinc-500">{text}</div></div>{active&&<CheckIcon className="size-5 text-violet-300"/>}</button>}

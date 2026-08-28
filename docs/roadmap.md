@@ -6,8 +6,8 @@
 - Codex and Claude provider adapters
 - durable SQLite run evidence and bounded logs
 - cooperative file leases
-- integration branches, validation, review verdicts, and PR drafts
-- Electron project and task control plane
+- integration branches, validation, review verdicts, Git-native handoffs, and opt-in GitHub pull requests
+- Electron project and task control plane with Git repository onboarding and concurrent project-scoped PMs
 - CI, security policy, and public documentation
 
 ## v0.2 — reviewable planning
@@ -31,6 +31,6 @@
 - one initiative spanning multiple repositories with repository-specific task DAGs
 - commit-pinned retrieval and deliberate shared knowledge publication
 - independent structured semantic review behind deterministic policy
-- opt-in, idempotent GitHub delivery with explicit repository and confirmation gates
+- hosting-provider delivery adapters with idempotent retries and explicit repository policy gates
 
 The v1 success criterion is explainability after interruption: codePilot can reconstruct what ran, what changed, what was validated, which policy decision was made, and which external action—if any—occurred.

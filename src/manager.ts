@@ -5,12 +5,13 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { detectPathCollisions } from "./collision.js";
 import { clearAgentGuidance, clearAgentInterrupt, drainAgentGuidance, registerAgentInterrupt } from "./control.js";
-import { writePullRequestDraft } from "./delivery.js";
+import { buildPullRequestBody, createGitHubPullRequest } from "./delivery.js";
 import type {
   AgentEvent,
   AgentTask,
   ProviderName,
   RunRequest,
+  RunStatus,
   RunSummary,
   WorkerResult,
 } from "./domain.js";
@@ -254,7 +255,7 @@ export class Manager {
       review.verdict = "needs_review";
       review.findings.push("No validated integration branch was available for delivery.");
     }
-    const status = review.verdict === "ready" ? "completed" : review.verdict === "rejected" ? "failed" : "needs_review";
+    let status: RunStatus = review.verdict === "ready" ? "completed" : review.verdict === "rejected" ? "failed" : "needs_review";
     const summary: RunSummary = {
       version: 0,
       runId,
@@ -266,7 +267,29 @@ export class Manager {
       validations,
       review,
     };
-    summary.deliveryArtifact = await writePullRequestDraft(stateDirectory, request.objective, summary);
+    summary.pullRequestBody = buildPullRequestBody(request.objective, summary);
+    if (request.createPullRequest) {
+      if (!integrationBranch) {
+        review.verdict = "needs_review";
+        review.findings.push("A pull request was requested, but no integration branch was available.");
+      } else {
+        try {
+          summary.pullRequestUrl = await createGitHubPullRequest(
+            repo,
+            integrationBranch,
+            request.objective,
+            summary.pullRequestBody,
+            status !== "completed",
+          );
+        } catch (error) {
+          review.verdict = "needs_review";
+          review.findings.push(`GitHub pull request creation failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      status = review.verdict === "ready" ? "completed" : review.verdict === "rejected" ? "failed" : "needs_review";
+      summary.status = status;
+      summary.pullRequestBody = buildPullRequestBody(request.objective, summary);
+    }
     store.finishRun(runId, status, summary);
     return summary;
   }
@@ -337,7 +360,7 @@ export class Manager {
     // The manager owns Git. Preserve every successful worker process's changes;
     // the report outcome still controls whether that commit is eligible to ship.
     if (!failure) {
-      await commitWorkspaceChanges(task.workspace, task.id);
+      await commitWorkspaceChanges(task.workspace, task, parsed.report);
     }
     const inspected = await inspectWorktree(task.workspace, task.baseCommit);
     const gitFacts = {
@@ -359,6 +382,7 @@ export class Manager {
     const result: WorkerResult = {
       version: 0,
       taskId: task.id,
+      provider: task.provider,
       ...(task.externalId ? { externalId: task.externalId } : {}),
       ...(parsed.report ? { report: parsed.report } : {}),
       verification: { processExitCode, baseCommit: task.baseCommit, ...gitFacts },

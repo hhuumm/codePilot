@@ -3,7 +3,7 @@ import { ChevronDownIcon, FolderOpenIcon, StopCircleIcon } from "@heroicons/reac
 import type { ActiveAgent } from "./types";
 import { collapseLifecycleEvents, EventView } from "./event-view";
 
-export function ActiveAgents() {
+export function ActiveAgents({ projectId }: { projectId: string }) {
   const [agents, setAgents] = useState<ActiveAgent[]>([]),
     [expanded, setExpanded] = useState<Set<string>>(new Set()),
     [messages, setMessages] = useState<Record<string, string>>({}),
@@ -15,7 +15,7 @@ export function ActiveAgents() {
     logs = useRef(new Map<string, HTMLDivElement>());
   async function refresh() {
     try {
-      const next = await window.codepilot.getActiveAgents();
+      const next = await window.codepilot.getActiveAgents(projectId);
       setAgents(next);
       setExpanded((current) => {
         const copy = new Set(current);
@@ -34,7 +34,7 @@ export function ActiveAgents() {
     void refresh();
     const timer = setInterval(() => void refresh(), 1200);
     return () => clearInterval(timer);
-  }, []);
+  }, [projectId]);
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
       for (const [taskId, element] of logs.current)
@@ -55,7 +55,7 @@ export function ActiveAgents() {
     setSending(agent.taskId);
     setError("");
     try {
-      setAgents(await window.codepilot.guideAgent(agent.taskId, message));
+      setAgents(await window.codepilot.guideAgent(projectId, agent.taskId, message));
       setMessages((current) => ({ ...current, [agent.taskId]: "" }));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -67,7 +67,7 @@ export function ActiveAgents() {
     setInterrupting(agent.taskId);
     setError("");
     try {
-      const result = await window.codepilot.interruptAgent(agent.taskId);
+      const result = await window.codepilot.interruptAgent(projectId, agent.taskId);
       setFeedback(result.feedback);
       setAgents(result.agents);
     } catch (cause) {
@@ -90,7 +90,7 @@ export function ActiveAgents() {
           </p>
         </div>
         <div className="flex gap-2">
-            <button onClick={() => void window.codepilot.openProjectDirectory()} className="flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs text-zinc-300 hover:bg-white/5"><FolderOpenIcon className="size-4" />Open project folder</button>
+            <button onClick={() => void window.codepilot.openProjectDirectory(projectId)} className="flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs text-zinc-300 hover:bg-white/5"><FolderOpenIcon className="size-4" />Open project folder</button>
           {agents.length > 1 && <>
             <button
               onClick={() =>

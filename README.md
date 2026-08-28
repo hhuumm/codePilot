@@ -1,7 +1,7 @@
 # codePilot
 <img width="1400" height="927" alt="image" src="https://github.com/user-attachments/assets/40c49c18-de69-4aa0-acdf-93ee2a22ba87" />
 
-codePilot is a local control plane for coordinating Codex and Claude Code across Git repositories. It gives each coding agent an isolated checkout, persists its evidence, integrates eligible commits on a review branch, validates the combined result, and produces a pull-request draft—without silently changing your primary branch.
+codePilot is a local control plane for coordinating Codex and Claude Code across Git repositories. It gives each coding agent an isolated checkout, persists its handoff in Git commits, integrates eligible commits on a review branch, validates the combined result, and produces a pull-request description—without silently changing your primary branch.
 
 > **Public preview (v0.1):** the local execution path works end to end and is covered by integration tests. This is still developer tooling for trusted repositories, not a hardened sandbox for hostile code or unattended production use.
 
@@ -18,19 +18,20 @@ Coding agents are effective inside one task and one checkout. The harder problem
 - bounded JSONL event ingestion and SQLite-backed run history
 - manager-owned commits retained under `refs/codepilot/runs/...`
 - collision detection, integration branches, repository validation, and deterministic review
-- local PR drafts under `.codepilot/runs/<run-id>/pull-request.md`
-- an Electron desktop control plane for projects, task queues, knowledge, and live agent events
+- Git-native task provenance and generated GitHub pull-request descriptions
+- an Electron desktop control plane with local/remote Git onboarding, project-scoped PM threads, task queues, knowledge, and live agent events
 
 ## Trust boundary
 
 Workers can run commands from a repository inside their temporary checkout. Validation commands are also user-configured shell commands. Use codePilot only with repositories and objectives you trust.
 
-codePilot filters parent conversation identifiers and common unrelated secrets from worker environments, bounds stored events and validation output, and never pushes or opens a remote pull request. These are guardrails, not a security sandbox. Read the [threat model](docs/threat-model.md) before live use.
+codePilot filters parent conversation identifiers and common unrelated secrets from worker environments and bounds stored events and validation output. Remote delivery is disabled unless a run explicitly requests `--create-pr`. These are guardrails, not a security sandbox. Read the [threat model](docs/threat-model.md) before live use.
 
 ## Requirements
 
 - Node.js 22+
 - Git
+- GitHub CLI for repository cloning and pull-request publication
 - Codex CLI and/or Claude Code, already installed and authenticated
 - Windows, macOS, or Linux for the CLI; the packaged desktop flow is currently Windows-first
 
@@ -62,7 +63,9 @@ npm run dev -- run "implement the requested change" `
 
 Repeat `--validate` to run multiple commands. Without explicit validation, codePilot discovers `check`, or `test`, `build`, and `lint` package scripts. Use `--no-integrate` to retain task commits and evidence without assembling a review branch.
 
-Successful changed runs create `codepilot/<run-id>`. Review that branch and its generated PR draft, then push or merge it yourself. codePilot does not mutate the checked-out primary branch or contact GitHub.
+Successful changed runs create `codepilot/<run-id>`. Each task becomes a manager-owned commit containing its agent outcome, claimed checks, concerns, follow-ups, and codePilot provenance. The combined run handoff is returned as `pullRequestBody`; no standalone Markdown draft is written to the project.
+
+Add `--create-pr` to explicitly push the integration branch and create a GitHub pull request using that generated description. Runs needing review are opened as drafts. Without this flag, codePilot does not contact GitHub.
 
 ## Desktop app
 
@@ -72,6 +75,10 @@ npm run desktop:dev
 ```
 
 Build the Windows package with `npm run desktop:build`; output is written under `desktop/out/`. Automatic task deployment is off by default.
+
+The Projects screen can register an existing local Git checkout or clone an HTTPS/SSH remote into the configured projects directory. Credentials are never accepted in repository URLs; Git's configured credential helper or SSH agent owns authentication. After registration, onboarding asks the operator to review the App Core start command, repository-relative working directory, and local URL before Project Manager begins; this step saves configuration but never launches the app. Each registered repository has its own Project Manager thread, conversation, backlog, knowledge, and run database. Turns are serialized within one project while different projects can think and execute concurrently, even as the desktop switches between them. Removing a project only unregisters it from the workspace; its repository and `.codepilot` data remain on disk so it can be onboarded again later.
+
+Settings includes a GitHub connection panel backed by the official `gh` browser login. GitHub CLI stores the credential in the operating-system credential store; codePilot receives only redacted account/status metadata. GitHub writes require both the global **Allow GitHub write operations** switch and an explicit **Create GitHub pull request** selection for that deployment. Today those writes are limited to pushing the generated integration branch and opening its pull request—codePilot does not merge, delete, change repository settings, or grant access.
 
 The older local Next.js dashboard is deliberately absent from the public tree because it contains a separately licensed UI kit. Electron is the supported public UI.
 
