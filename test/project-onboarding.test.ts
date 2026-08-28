@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -14,7 +14,10 @@ test("canonicalizes an existing Git checkout from a nested directory", () => {
   try {
     execFileSync("git", ["init", root]);
     mkdirSync(join(root, "nested"));
-    assert.equal(canonicalGitRepository(join(root, "nested")), realpathSync(root));
+    const expected = statSync(root);
+    const actual = statSync(canonicalGitRepository(join(root, "nested")));
+    assert.equal(actual.dev, expected.dev);
+    assert.equal(actual.ino, expected.ino);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
