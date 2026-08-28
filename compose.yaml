@@ -1,0 +1,36 @@
+services:
+  codex-worker:
+    profiles: ["experimental"]
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+      args:
+        AGENT: codex
+    cpus: 2
+    mem_limit: 4g
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m
+    volumes:
+      - worker-codex-workspace:/workspace
+
+  claude-worker:
+    profiles: ["experimental"]
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+      args:
+        AGENT: claude
+    cpus: 2
+    mem_limit: 4g
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m
+    volumes:
+      - worker-claude-workspace:/workspace
+
+volumes:
+  worker-codex-workspace:
+  worker-claude-workspace:

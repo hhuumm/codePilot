@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.codepilot/
+*.log
+.env
+# The original Next.js dashboard contains a separately licensed UI kit and is
+# retained only as a local migration reference. The public product surface is
+# the Electron desktop application.
+dashboard/
+desktop/.vite/
+desktop/out/
+coverage/
+*.tsbuildinfo

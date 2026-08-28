@@ -1,0 +1,36 @@
+{
+  "name": "codepilot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local control plane for coordinating coding agents across Git repositories.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hhuumm/codePilot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hhuumm/codePilot/issues"
+  },
+  "type": "module",
+  "bin": {
+    "codepilot": "dist/src/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/src/cli.js",
+    "worker": "node dist/src/worker.js",
+    "desktop:dev": "npm --prefix desktop run dev",
+    "desktop:build": "npm --prefix desktop run build",
+    "test": "node --import tsx --test test/**/*.test.ts",
+    "check": "npm run build && npm test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0"
+  }
+}
